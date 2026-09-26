@@ -33,6 +33,8 @@ export const ShabadText = ({
   paneAttributes,
   setPaneAttributes,
   currentPane,
+  isProjection = false,
+  projectionSource = false,
 }) => {
   const [previousVerseIndex, setPreviousIndex] = useState();
   const [filteredItems, setFilteredItems] = useState([]);
@@ -42,6 +44,7 @@ export const ShabadText = ({
 
   const virtuosoRef = useRef(null);
   const activeVerseRef = useRef(null);
+  const projectionRange = useStoreState((state) => state.projection?.range);
 
   const {
     activeVerseId,
@@ -76,6 +79,7 @@ export const ShabadText = ({
   } = useStoreActions((actions) => actions.navigator);
 
   const updateTraversedVerse = (newTraversedVerse, verseIndex, crossPlatformId = null) => {
+    if (isProjection) return;
     if (isMiscSlide) {
       setIsMiscSlide(false);
     }
@@ -120,25 +124,29 @@ export const ShabadText = ({
   };
 
   const updateHomeVerse = (verseIndex) => {
-    changeHomeVerse(verseIndex, { paneAttributes, setPaneAttributes });
+    if (!isProjection) changeHomeVerse(verseIndex, { paneAttributes, setPaneAttributes });
   };
 
   const setVerseList = (verseList) => {
     if (verseList.length) {
       setRawVerses(verseList);
-      saveToHistory(
-        shabadId,
-        verseList,
-        baniType,
-        { verseHistory, setVerseHistory, baniLength },
-        initialVerseId,
-      );
+      if (!isProjection) {
+        saveToHistory(
+          shabadId,
+          verseList,
+          baniType,
+          { verseHistory, setVerseHistory, baniLength },
+          initialVerseId,
+        );
+      }
       const filtered = filterRequiredVerseItems(verseList);
       setFilteredItems(filtered);
-      const resumeVerseId = paneAttributes?.activeVerse || filtered[0].verseId;
       if (filtered.length > 0) {
+        const resumeVerseId = paneAttributes?.activeVerse || filtered[0].verseId;
         const resumeVerseIndex = filtered.findIndex((v) => v.verseId === resumeVerseId);
-        if (resumeVerseIndex >= 0) {
+        if (isProjection && resumeVerseIndex >= 0) {
+          setActiveVerse({ [resumeVerseIndex]: resumeVerseId });
+        } else if (resumeVerseIndex >= 0) {
           updateTraversedVerse(resumeVerseId, resumeVerseIndex);
         } else {
           updateTraversedVerse(filtered[0].verseId, 0);
@@ -159,9 +167,16 @@ export const ShabadText = ({
 
   useEffect(() => {
     if (filteredItems.length) {
-      setTimeout(() => {
-        scrollToVerse(initialVerseId, filteredItems, virtuosoRef);
-      }, 100);
+      if (isProjection) {
+        const projectedActiveIndex = filteredItems.findIndex(
+          (verse) => verse.verseId === paneAttributes?.activeVerse,
+        );
+        if (projectedActiveIndex >= 0) {
+          setActiveVerse({ [projectedActiveIndex]: paneAttributes.activeVerse });
+        }
+        return;
+      }
+      setTimeout(() => scrollToVerse(initialVerseId, filteredItems, virtuosoRef), 100);
       const initialVerseIndex = filteredItems.findIndex(
         (verse) => verse.verseId === initialVerseId,
       );
@@ -177,41 +192,59 @@ export const ShabadText = ({
         updateTraversedVerse(initialVerseId, initialVerseIndex);
       }
     }
-  }, [filteredItems]);
+  }, [filteredItems, isProjection, paneAttributes?.activeVerse]);
 
   useEffect(() => {
+    if (isProjection) return;
     const baniVerseIndex = filteredItems.findIndex(
       (obj) => obj.crossPlatformId === savedCrossPlatformId,
     );
     if (baniVerseIndex >= 0) {
       updateTraversedVerse(filteredItems[baniVerseIndex].ID, baniVerseIndex);
     }
-  }, [savedCrossPlatformId]);
+  }, [isProjection, savedCrossPlatformId]);
 
   useEffect(() => {
     const overlayVerse = filterOverlayVerseItems(rawVerses, activeVerseId);
-    ipcRenderer.send(
-      'show-line',
-      JSON.stringify({
-        Line: overlayVerse,
-        live: liveFeed,
-        activeVerseId,
-        baniType,
-        shabadId,
-        currentPane,
-      }),
-    );
-    if (
+    if (!isProjection) {
+      ipcRenderer.send(
+        'show-line',
+        JSON.stringify({
+          Line: overlayVerse,
+          live: liveFeed,
+          activeVerseId,
+          baniType,
+          shabadId,
+          currentPane,
+        }),
+      );
+    }
+    const paneIsActiveShabad =
       (isCeremonyBani && ceremonyId === paneAttributes.activeShabad) ||
       (isSundarGutkaBani && sundarGutkaBaniId === paneAttributes.activeShabad) ||
-      (!isSundarGutkaBani && !isCeremonyBani && activeShabadId === paneAttributes.activeShabad)
-    ) {
+      (!isSundarGutkaBani && !isCeremonyBani && activeShabadId === paneAttributes.activeShabad);
+    if (!isProjection && paneIsActiveShabad) {
       if (lineNumber !== null && filteredItems[lineNumber - 1]?.verseId === activeVerseId) {
         setActiveVerse({ [lineNumber - 1]: activeVerseId });
         scrollToVerse(activeVerseId, filteredItems, virtuosoRef);
       }
     }
-  }, [rawVerses, activeShabadId, activeVerseId, sundarGutkaBaniId, ceremonyId]);
+  }, [rawVerses, activeShabadId, activeVerseId, sundarGutkaBaniId, ceremonyId, isProjection]);
+
+  useEffect(() => {
+    if (
+      !isProjection ||
+      projectionRange?.paneId !== currentPane ||
+      !filteredItems.length ||
+      !virtuosoRef.current
+    ) {
+      return;
+    }
+    virtuosoRef.current.scrollToIndex({
+      index: Math.min(projectionRange.startIndex, filteredItems.length - 1),
+      align: 'start',
+    });
+  }, [currentPane, filteredItems.length, isProjection, projectionRange]);
 
   const getVerse = (direction) => {
     let verseIndex = null;
@@ -246,6 +279,7 @@ export const ShabadText = ({
   };
 
   useEffect(() => {
+    if (isProjection) return;
     if (activePaneId === currentPane) {
       if (shortcuts.nextVerse) {
         const nextVerse = getVerse('next');
@@ -302,9 +336,10 @@ export const ShabadText = ({
         });
       }
     }
-  }, [shortcuts]);
+  }, [isProjection, shortcuts]);
 
   useEffect(() => {
+    if (isProjection) return undefined;
     const milisecondsDelay = parseInt(autoplayDelay, 10) * 1000;
     const interval = setInterval(() => {
       if (autoplayToggle) {
@@ -317,7 +352,7 @@ export const ShabadText = ({
     return () => {
       clearInterval(interval);
     };
-  }, [autoplayToggle, autoplayDelay]);
+  }, [autoplayToggle, autoplayDelay, isProjection]);
 
   return (
     <div className="shabad-list">
@@ -327,6 +362,11 @@ export const ShabadText = ({
           data={filteredItems}
           ref={virtuosoRef}
           totalCount={filteredItems.length}
+          rangeChanged={(range) => {
+            if (projectionSource && !isProjection) {
+              ipcRenderer.send('projection-range', { paneId: currentPane, ...range });
+            }
+          }}
           itemContent={(index, verseObj) => {
             const { verseId, verse, english } = verseObj;
             return (
@@ -358,4 +398,6 @@ ShabadText.propTypes = {
   paneAttributes: PropTypes.object,
   setPaneAttributes: PropTypes.func,
   currentPane: PropTypes.number,
+  isProjection: PropTypes.bool,
+  projectionSource: PropTypes.bool,
 };

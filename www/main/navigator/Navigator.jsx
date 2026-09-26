@@ -46,7 +46,7 @@ const Navigator = () => {
     controllerMarkup = (
       <div className="multipane-grid">
         <div className="shabad1-container">
-          <ShabadPane multiPaneId={1} />
+          <ShabadPane multiPaneId={1} projectionSource />
         </div>
         <div className="shabad2-container">
           <ShabadPane multiPaneId={2} />
@@ -59,7 +59,7 @@ const Navigator = () => {
   } else {
     controllerMarkup = (
       <div className="navigator-row">
-        <ShabadPane />
+        <ShabadPane projectionSource />
         <MiscPane
           waheguruSlide={displayWaheguruSlide}
           moolMantraSlide={displayMoolMantraSlide}
@@ -72,13 +72,7 @@ const Navigator = () => {
 
   return (
     <>
-      <div
-        className={
-          isCurrentWorkSpaceSingleDisplay
-            ? 'single-display-viewer'
-            : 'navigator-row'
-        }
-      >
+      <div className={isCurrentWorkSpaceSingleDisplay ? 'single-display-viewer' : 'navigator-row'}>
         {!isCurrentWorkSpaceSingleDisplay && <SearchPane />}
         <ViewerPane />
       </div>

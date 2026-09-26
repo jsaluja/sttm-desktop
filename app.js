@@ -97,7 +97,8 @@ if (currentTheme === undefined) {
 let mainWindow;
 let viewerWindow = false;
 let projectionWindow = false;
-let projectionCapturePending = false;
+let projectionViewport = null;
+let projectionRange = null;
 let startChangelogOpenTimer;
 let endChangelogOpenTimer;
 
@@ -342,7 +343,9 @@ function getExternalDisplays() {
 }
 
 function sendToViewerWindows(channel, ...args) {
-  if (viewerWindow && !viewerWindow.isDestroyed()) viewerWindow.webContents.send(channel, ...args);
+  [viewerWindow, projectionWindow].forEach((window) => {
+    if (window && !window.isDestroyed()) window.webContents.send(channel, ...args);
+  });
 }
 
 function showChangelog() {
@@ -351,46 +354,6 @@ function showChangelog() {
   const { limitChangeLog } = savedSettings;
 
   return lastSeen !== appVersion || (lastSeenCount < maxChangeLogSeenCount && !limitChangeLog);
-}
-
-async function captureShabadPane(targetWindow) {
-  if (
-    projectionCapturePending ||
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    projectionWindow !== targetWindow ||
-    targetWindow.isDestroyed() ||
-    !targetWindow.isVisible()
-  ) {
-    return;
-  }
-
-  projectionCapturePending = true;
-  try {
-    const paneBounds = await mainWindow.webContents.executeJavaScript(`(() => {
-      const pane = document.querySelector(
-        '.launchpad > .navigator-row:last-child > .shabad-pane, .launchpad .multipane-grid > .shabad1-container > .shabad-pane',
-      );
-      if (!pane) return null;
-      const { x, y, width, height } = pane.getBoundingClientRect();
-      return { x, y, width, height };
-    })()`);
-    if (!paneBounds || paneBounds.width < 2 || paneBounds.height < 2) return;
-
-    const frame = await mainWindow.webContents.capturePage({
-      x: Math.floor(paneBounds.x),
-      y: Math.floor(paneBounds.y),
-      width: Math.ceil(paneBounds.width),
-      height: Math.ceil(paneBounds.height),
-    });
-    if (projectionWindow === targetWindow && !targetWindow.isDestroyed() && !frame.isEmpty()) {
-      targetWindow.webContents.send('projection-frame', frame.toDataURL());
-    }
-  } catch (error) {
-    log.warn(`[projection] Pane capture failed: ${error.message}`);
-  } finally {
-    projectionCapturePending = false;
-  }
 }
 
 function createViewer(ipcData, display = getExternalDisplays()[0]) {
@@ -470,18 +433,7 @@ function createViewer(ipcData, display = getExternalDisplays()[0]) {
 function createProjection(display) {
   if (!display || projectionWindow) return;
 
-  const projectionHtml = `<!DOCTYPE html>
-    <html><head><meta charset="utf-8"><style>
-    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
-    img { width: 100%; height: 100%; object-fit: contain; }
-    </style></head><body><img id="frame"><script>
-    const { ipcRenderer } = require('electron');
-    ipcRenderer.on('projection-frame', (_event, frame) => {
-      document.getElementById('frame').src = frame;
-    });
-    </script></body></html>`;
-
-  const quadrantWindow = new BrowserWindow({
+  const paneWindow = new BrowserWindow({
     width: display.size.width,
     height: display.size.height,
     x: display.bounds.x,
@@ -496,24 +448,52 @@ function createProjection(display) {
       contextIsolation: false,
     },
   });
-  projectionWindow = quadrantWindow;
-  quadrantWindow.displayId = display.id;
-  let captureTimer;
-  quadrantWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(projectionHtml)}`);
-  quadrantWindow.webContents.on('did-finish-load', () => {
-    quadrantWindow.show();
-    quadrantWindow.setFullScreen(true);
-    captureShabadPane(quadrantWindow);
-    captureTimer = setInterval(() => captureShabadPane(quadrantWindow), 250);
+  projectionWindow = paneWindow;
+  paneWindow.displayId = display.id;
+  paneWindow.loadURL(`file://${__dirname}/www/viewer.html?paneProjection=1`);
+  remote.enable(paneWindow.webContents);
+  paneWindow.webContents.on('did-fail-load', (_event, code, description, url) => {
+    log.error(`[projection] Load failed (${code}): ${description} ${url}`);
   });
-  quadrantWindow.on('closed', () => {
-    clearInterval(captureTimer);
-    if (projectionWindow === quadrantWindow) {
-      projectionCapturePending = false;
+  paneWindow.webContents.on('render-process-gone', (_event, details) => {
+    log.error(`[projection] Renderer exited: ${details.reason} ${details.exitCode}`);
+  });
+  paneWindow.webContents.on('did-finish-load', () => {
+    paneWindow.webContents.insertCSS(styles);
+    paneWindow.show();
+    paneWindow.setFullScreen(true);
+    paneWindow.webContents.send('wc-webview-enabled');
+  });
+  paneWindow.on('closed', () => {
+    if (projectionWindow === paneWindow) {
       projectionWindow = false;
     }
   });
 }
+
+ipcMain.on('viewer-render-start', (event, url) => {
+  if (event.sender === projectionWindow?.webContents) {
+    log.info(`[projection] Viewer entry loaded: ${url}`);
+  }
+});
+
+ipcMain.on('viewer-boot-error', (event, message) => {
+  if (event.sender === projectionWindow?.webContents) {
+    log.error(`[projection] Viewer boot failed: ${message}`);
+  }
+});
+
+ipcMain.on('viewer-runtime-error', (event, message) => {
+  if (event.sender === projectionWindow?.webContents) {
+    log.error(`[projection] Viewer runtime failed: ${message}`);
+  }
+});
+
+ipcMain.on('projection-render-state', (event, state) => {
+  if (event.sender === projectionWindow?.webContents) {
+    log.info(`[projection] React state: ${JSON.stringify(state)}`);
+  }
+});
 
 function syncViewerWindows() {
   const displays = getExternalDisplays();
@@ -562,6 +542,49 @@ function syncViewerWindows() {
     previousProjectionWindow.close();
   }
 }
+
+ipcMain.on('projection-state-request', (event) => {
+  if (event.sender !== projectionWindow?.webContents || !mainWindow || mainWindow.isDestroyed()) {
+    log.warn('[projection] Ignored state request from an unexpected renderer');
+    return;
+  }
+  log.info('[projection] State request received from display renderer');
+  mainWindow.webContents.send('projection-state-request');
+});
+
+ipcMain.on('projection-state-response', (event, state) => {
+  if (
+    event.sender !== mainWindow?.webContents ||
+    !projectionWindow ||
+    projectionWindow.isDestroyed()
+  ) {
+    log.warn('[projection] Ignored state response from an unexpected renderer');
+    return;
+  }
+  log.info(`[projection] State response received; viewport=${Boolean(projectionViewport?.width)}`);
+  projectionWindow.webContents.send('projection-state', {
+    ...state,
+    viewport: projectionViewport,
+    range: projectionRange,
+  });
+});
+
+ipcMain.on('projection-viewport', (event, viewport) => {
+  if (event.sender !== mainWindow?.webContents) return;
+  projectionViewport = viewport;
+  log.info(`[projection] Source pane viewport ${viewport.width}x${viewport.height}`);
+  if (projectionWindow && !projectionWindow.isDestroyed()) {
+    projectionWindow.webContents.send('projection-viewport', viewport);
+  }
+});
+
+ipcMain.on('projection-range', (event, range) => {
+  if (event.sender !== mainWindow?.webContents) return;
+  projectionRange = range;
+  if (projectionWindow && !projectionWindow.isDestroyed()) {
+    projectionWindow.webContents.send('projection-range', range);
+  }
+});
 
 function writeFileCallback(err) {
   if (err) {
@@ -904,6 +927,9 @@ ipcMain.on('show-line', (event, arg) => {
     viewerWindow.webContents.send('show-line', linePayload);
   } else {
     createViewer({ send: 'show-line', data: linePayload });
+  }
+  if (projectionWindow && !projectionWindow.isDestroyed()) {
+    projectionWindow.webContents.send('show-line', linePayload);
   }
   syncViewerWindows();
   if (linePayload.live) {

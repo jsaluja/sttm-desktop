@@ -19,6 +19,10 @@ const createSettingsActions = (settingsType) => {
 };
 
 const ViewerState = createStore({
+  app: {
+    ...GlobalState.getState().app,
+    ...createSettingsActions('app'),
+  },
   // Create shadow object of user settings from Global State
   userSettings: {
     ...GlobalState.getState().userSettings,
@@ -27,6 +31,15 @@ const ViewerState = createStore({
   navigator: {
     ...GlobalState.getState().navigator,
     ...createSettingsActions('navigator'),
+  },
+  projection: {
+    ready: false,
+    paneId: null,
+    width: 0,
+    height: 0,
+    range: null,
+    setViewport: action((state, payload) => ({ ...state, ...payload })),
+    setRange: action((state, payload) => ({ ...state, range: payload })),
   },
   viewerSettings: {
     containerPadding: {
@@ -55,12 +68,36 @@ const ViewerState = createStore({
       return newState;
     }),
   },
+  hydrateProjectionState: action((state, payload) => ({
+    ...state,
+    app: { ...state.app, ...payload.app },
+    navigator: { ...state.navigator, ...payload.navigator },
+    userSettings: { ...state.userSettings, ...payload.userSettings },
+    projection: {
+      ...state.projection,
+      ...payload.viewport,
+      range: payload.range || state.projection.range,
+      ready: true,
+    },
+  })),
 });
 
 // Whenever a setting is changed in GlobalState, call the respective action here as well.
 global.platform.ipc.on('update-viewer-setting', (_event, setting) => {
   const { actionName, payload, settingType } = JSON.parse(setting);
   ViewerState.getActions()[settingType][actionName](payload);
+});
+
+global.platform.ipc.on('projection-state', (_event, state) => {
+  ViewerState.getActions().hydrateProjectionState(state);
+});
+
+global.platform.ipc.on('projection-viewport', (_event, viewport) => {
+  ViewerState.getActions().projection.setViewport(viewport);
+});
+
+global.platform.ipc.on('projection-range', (_event, range) => {
+  ViewerState.getActions().projection.setRange(range);
 });
 
 global.platform.ipc.on('show-line', (_event, payload) => {

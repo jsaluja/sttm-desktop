@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import PropTypes from 'prop-types';
 import { useStoreState } from 'easy-peasy';
 
 import classNames from '../../common/utils/classnames';
@@ -12,13 +13,13 @@ const remote = require('@electron/remote');
 
 const { i18n } = remote.require('./app');
 
-const ShabadHeader = () => {
+const ShabadHeader = ({ data = {} }) => {
   const [showViewer, setShowViewer] = useState(true);
   const { defaultPaneId } = useStoreState((state) => state.userSettings);
 
   useEffect(() => {
-    ipcRenderer.send('toggle-viewer-window', showViewer);
-  }, [showViewer]);
+    if (!data.isProjection) ipcRenderer.send('toggle-viewer-window', showViewer);
+  }, [data.isProjection, showViewer]);
 
   return (
     <div className="shabad-pane-header">
@@ -43,6 +44,10 @@ const ShabadHeader = () => {
       <ArrowIcon paneId={defaultPaneId} />
     </div>
   );
+};
+
+ShabadHeader.propTypes = {
+  data: PropTypes.object,
 };
 
 export default ShabadHeader;

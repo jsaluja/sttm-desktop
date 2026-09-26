@@ -15,8 +15,16 @@
         const { ipcRenderer } = require('electron');
         let root = null;
 
+        window.addEventListener('error', (event) => {
+          ipcRenderer.send('viewer-runtime-error', event.message || 'Unknown renderer error');
+        });
+        window.addEventListener('unhandledrejection', (event) => {
+          ipcRenderer.send('viewer-runtime-error', event.reason?.stack || String(event.reason));
+        });
+
         ipcRenderer.on('wc-webview-enabled', () => {
           try {
+            ipcRenderer.send('viewer-render-start', window.location.href);
             const app = require('./js/viewer/viewerApp.js').default;
             const { createRoot } = require('react-dom/client');
 
