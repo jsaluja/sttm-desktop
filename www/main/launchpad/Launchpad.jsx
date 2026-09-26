@@ -5,7 +5,7 @@ import { ipcRenderer } from 'electron';
 import Toolbar from '../toolbar';
 import Navigator from '../navigator';
 import WorkspaceBar from '../workspace-bar';
-import { useKeys, useSlides } from '../common/hooks';
+import { useKeys, useSlides, useAudioRecorder, useRecordingState } from '../common/hooks';
 
 import {
   Ceremonies,
@@ -48,6 +48,9 @@ const Launchpad = () => {
   const ref = useRef();
   const projectionStateRef = useRef();
   projectionStateRef.current = { app: appState, navigator: navigatorState, userSettings };
+
+  useAudioRecorder();
+  const isRecording = useRecordingState();
 
   useEffect(() => {
     const requestProjectionState = () => {
@@ -155,6 +158,12 @@ const Launchpad = () => {
     }
   };
 
+  const handleRecordingToggle = () => {
+    if (document.activeElement !== ref.current) {
+      ipcRenderer.send('toggle-recording');
+    }
+  };
+
   const handleEnter = () => {
     if (!shortcuts.openFirstResult) {
       ref.current.blur();
@@ -195,6 +204,7 @@ const Launchpad = () => {
   useKeys('ArrowUp', 'single', handleUpAndLeft);
   useKeys('ArrowLeft', 'single', handleUpAndLeft);
   useKeys('Space', 'single', handleSpacebar);
+  useKeys('KeyR', 'single', handleRecordingToggle);
   useKeys('Enter', 'single', handleEnter);
   useKeys('NumpadEnter', 'single', handleEnter);
   useKeys('KeyG', 'combination', handleCtrlG);
@@ -212,6 +222,12 @@ const Launchpad = () => {
   return (
     <>
       <WorkspaceBar />
+      {isRecording && (
+        <div className="recording-indicator">
+          <span className="recording-indicator-dot" />
+          REC
+        </div>
+      )}
       <div className={`launchpad${isSingleDisplayMode ? ' single-display misc-pane' : ''}`}>
         <Toolbar />
         {isSundarGutkaOverlay && <SundarGutka onScreenClose={onScreenClose} />}

@@ -1,4 +1,5 @@
 const electron = require('electron');
+const { spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const express = require('express');
@@ -101,6 +102,89 @@ let projectionViewport = null;
 let projectionRange = null;
 let startChangelogOpenTimer;
 let endChangelogOpenTimer;
+
+const recordingsDir = path.join(__dirname, 'recordings');
+const recordingUploaderPython = path.join(
+  __dirname,
+  '..',
+  'gurbani-asr-tools',
+  '.venv',
+  'bin',
+  'python',
+);
+const recordingUploaderScript = path.join(
+  __dirname,
+  '..',
+  'gurbani-asr-tools',
+  'push_sttm_desktop_recording.py',
+);
+const recordingUploadCollection = 'bhai_harjinder_singh_srinagar';
+let isRecording = false;
+let recordingStartTime = null;
+let recordingSessionId = null;
+let recordingSessionDir = null;
+let recordingEvents = [];
+
+function writeRecordingEventsCsv() {
+  const header = 'verseId,timestamp_seconds\n';
+  const rows = recordingEvents.map((e) => `${e.verseId ?? ''},${e.t.toFixed(3)}`).join('\n');
+  fs.mkdirSync(recordingSessionDir, { recursive: true });
+  fs.writeFileSync(path.join(recordingSessionDir, `${recordingSessionId}.csv`), `${header}${rows}`);
+}
+
+function uploadRecording(folderPath, sessionId) {
+  const wavPath = path.join(folderPath, `${sessionId}.wav`);
+  const csvPath = path.join(folderPath, `${sessionId}.csv`);
+  if (!fs.existsSync(wavPath) || !fs.existsSync(csvPath)) {
+    log.error(`Recording upload skipped because finalized files are missing: ${folderPath}`);
+    return;
+  }
+
+  const uploader = spawn(
+    recordingUploaderPython,
+    [
+      recordingUploaderScript,
+      folderPath,
+      '--collection',
+      recordingUploadCollection,
+      '--skip-collection-csv',
+    ],
+    { cwd: path.dirname(recordingUploaderScript), env: process.env },
+  );
+
+  uploader.stdout.on('data', (data) => log.info(`[recording-upload] ${data.toString().trim()}`));
+  uploader.stderr.on('data', (data) => log.error(`[recording-upload] ${data.toString().trim()}`));
+  uploader.on('error', (error) => log.error('Failed to start recording uploader', error));
+  uploader.on('close', (code) => {
+    if (code === 0) {
+      log.info(`Recording upload completed: ${sessionId}`);
+    } else {
+      log.error(`Recording upload failed for ${sessionId} with exit code ${code}`);
+    }
+  });
+}
+
+function toggleRecording() {
+  if (!isRecording) {
+    isRecording = true;
+    recordingStartTime = Date.now();
+    recordingSessionId = new Date(recordingStartTime).toISOString().replace(/[:.]/g, '-');
+    recordingSessionDir = path.join(recordingsDir, recordingSessionId);
+    fs.mkdirSync(recordingSessionDir, { recursive: true });
+    recordingEvents = [];
+  } else {
+    isRecording = false;
+    writeRecordingEventsCsv();
+  }
+
+  const payload = { isRecording, sessionId: recordingSessionId, folderPath: recordingSessionDir };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('recording-toggle', payload);
+  }
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
+    viewerWindow.webContents.send('recording-state', isRecording);
+  }
+}
 
 app.setAsDefaultProtocolClient('sttm-desktop');
 
@@ -906,6 +990,25 @@ ipcMain.on('clear-apv', () => {
 
 ipcMain.on('save-overlay-settings', (event, overlayPrefs) => {
   updateOverlayVars(JSON.parse(overlayPrefs));
+});
+
+ipcMain.on('toggle-recording', () => {
+  toggleRecording();
+});
+
+ipcMain.on('recording-files-ready', (_event, { sessionId, folderPath }) => {
+  uploadRecording(folderPath, sessionId);
+});
+
+ipcMain.on('recording-event', (_event, payload) => {
+  if (!isRecording || !payload || payload.event !== 'verse' || payload.verseId == null) {
+    return;
+  }
+
+  recordingEvents.push({
+    verseId: payload.verseId,
+    t: (Date.now() - recordingStartTime) / 1000,
+  });
 });
 
 ipcMain.on('deleteToken', () => {

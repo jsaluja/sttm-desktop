@@ -65,6 +65,35 @@ $gurmukhi-font-family-thick: 'gurbaniakharthick';
 /*
   Custom Styles
 */
+.workspace-bar {
+  position: relative;
+}
+
+.recording-indicator {
+  align-items: center;
+  background: rgba(220, 53, 69, 0.9);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  gap: 6px;
+  letter-spacing: 0.08em;
+  padding: 6px 12px;
+  position: absolute;
+  right: 14px;
+  top: 4px;
+  z-index: 3;
+}
+
+.recording-indicator-dot {
+  background: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
 body {
   background-color: #fff;
   color: #222;

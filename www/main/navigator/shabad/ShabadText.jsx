@@ -6,6 +6,7 @@ import PropTypes from 'prop-types';
 
 import { loadShabad, loadBani, loadCeremony } from '../utils';
 import { ShabadVerse } from '../../common/sttm-ui';
+import { useRecordingState } from '../../common/hooks';
 import {
   changeHomeVerse,
   changeVerse,
@@ -45,6 +46,7 @@ export const ShabadText = ({
   const virtuosoRef = useRef(null);
   const activeVerseRef = useRef(null);
   const lastProjectionSyncRef = useRef({ index: null, startIndex: null });
+  const isRecording = useRecordingState();
   const projectionRange = useStoreState((state) => state.projection?.range);
 
   const {
@@ -122,6 +124,9 @@ export const ShabadText = ({
       activeShabadId,
       paneAttributes,
     });
+    if (isRecording) {
+      ipcRenderer.send('recording-event', { event: 'verse', verseId: newTraversedVerse });
+    }
   };
 
   const updateHomeVerse = (verseIndex) => {
