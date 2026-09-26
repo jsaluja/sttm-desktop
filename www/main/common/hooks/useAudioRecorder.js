@@ -75,6 +75,7 @@ export const useAudioRecorder = () => {
 
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
+
       const source = audioCtx.createMediaStreamSource(stream);
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
