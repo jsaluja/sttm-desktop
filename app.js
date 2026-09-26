@@ -30,6 +30,7 @@ const prodConfig = require('./config.prod.json');
 const defaultPrefs = require('./www/configs/defaults.json');
 const themes = require('./www/configs/themes.json');
 const Analytics = require('./analytics');
+const { styles } = require('./resetViewerStyles');
 
 // Are we packaging for a platform's app store?
 const appstore = false;
@@ -40,7 +41,6 @@ const Store = require('./www/js/store');
 const {
   savedSettingsCamelCase,
 } = require('./www/js/common/store/user-settings/get-saved-user-settings');
-const { styles } = require('./resetViewerStyles');
 /* eslint-enable */
 
 const savedSettings = savedSettingsCamelCase();
@@ -96,6 +96,8 @@ if (currentTheme === undefined) {
 
 let mainWindow;
 let viewerWindow = false;
+let projectionWindow = false;
+let projectionCapturePending = false;
 let startChangelogOpenTimer;
 let endChangelogOpenTimer;
 
@@ -164,7 +166,6 @@ const secondaryWindows = {
   },
 };
 let manualUpdate = false;
-const viewerWindowPos = {};
 let lastLine;
 
 function openSecondaryWindow(windowName) {
@@ -335,24 +336,13 @@ function deleteToken() {
   });
 }
 
-function checkForExternalDisplay() {
-  const electronScreen = electron.screen;
-  const displays = electronScreen.getAllDisplays();
-  let externalDisplay = null;
-  Object.keys(displays).forEach((i) => {
-    if (displays[i].bounds.x !== 0 || displays[i].bounds.y !== 0) {
-      externalDisplay = displays[i];
-    }
-  });
+function getExternalDisplays() {
+  const primaryDisplayId = electron.screen.getPrimaryDisplay().id;
+  return electron.screen.getAllDisplays().filter((display) => display.id !== primaryDisplayId);
+}
 
-  if (externalDisplay) {
-    viewerWindowPos.x = externalDisplay.bounds.x + 50;
-    viewerWindowPos.y = externalDisplay.bounds.y + 50;
-    viewerWindowPos.w = externalDisplay.size.width;
-    viewerWindowPos.h = externalDisplay.size.height;
-    return true;
-  }
-  return false;
+function sendToViewerWindows(channel, ...args) {
+  if (viewerWindow && !viewerWindow.isDestroyed()) viewerWindow.webContents.send(channel, ...args);
 }
 
 function showChangelog() {
@@ -363,84 +353,214 @@ function showChangelog() {
   return lastSeen !== appVersion || (lastSeenCount < maxChangeLogSeenCount && !limitChangeLog);
 }
 
-function createViewer(ipcData) {
-  const isExternal = checkForExternalDisplay();
+async function captureShabadPane(targetWindow) {
+  if (
+    projectionCapturePending ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    projectionWindow !== targetWindow ||
+    targetWindow.isDestroyed() ||
+    !targetWindow.isVisible()
+  ) {
+    return;
+  }
 
-  if (isExternal) {
-    viewerWindow = new BrowserWindow({
-      width: 800,
-      height: 400,
-      x: viewerWindowPos.x,
-      y: viewerWindowPos.y,
-      autoHideMenuBar: true,
-      show: false,
-      titleBarStyle: 'hidden',
-      frame: false,
-      backgroundColor: '#000000',
-      webPreferences: {
-        nodeIntegration: true,
-        enableRemoteModule: true,
-        contextIsolation: false,
-        webviewTag: true,
-        nodeIntegrationInSubFrames: true,
-        nodeIntegrationInWorker: true,
-        media: true,
-      },
-    });
-    viewerWindow.loadURL(`file://${__dirname}/www/viewer.html`);
-    remote.enable(viewerWindow.webContents);
-    viewerWindow.webContents.on('did-finish-load', () => {
-      viewerWindow.webContents.insertCSS(styles);
-      viewerWindow.show();
-      const [width, height] = viewerWindow.getSize();
-      mainWindow.webContents.send(
-        'external-display',
-        JSON.stringify({
-          width,
-          height,
-        }),
+  projectionCapturePending = true;
+  try {
+    const paneBounds = await mainWindow.webContents.executeJavaScript(`(() => {
+      const pane = document.querySelector(
+        '.launchpad > .navigator-row:last-child > .shabad-pane, .launchpad .multipane-grid > .shabad1-container > .shabad-pane',
       );
+      if (!pane) return null;
+      const { x, y, width, height } = pane.getBoundingClientRect();
+      return { x, y, width, height };
+    })()`);
+    if (!paneBounds || paneBounds.width < 2 || paneBounds.height < 2) return;
+
+    const frame = await mainWindow.webContents.capturePage({
+      x: Math.floor(paneBounds.x),
+      y: Math.floor(paneBounds.y),
+      width: Math.ceil(paneBounds.width),
+      height: Math.ceil(paneBounds.height),
+    });
+    if (projectionWindow === targetWindow && !targetWindow.isDestroyed() && !frame.isEmpty()) {
+      targetWindow.webContents.send('projection-frame', frame.toDataURL());
+    }
+  } catch (error) {
+    log.warn(`[projection] Pane capture failed: ${error.message}`);
+  } finally {
+    projectionCapturePending = false;
+  }
+}
+
+function createViewer(ipcData, display = getExternalDisplays()[0]) {
+  if (viewerWindow && !viewerWindow.isDestroyed()) return;
+  if (!display) return;
+
+  const presenterWindow = new BrowserWindow({
+    width: 800,
+    height: 400,
+    x: display.bounds.x + 50,
+    y: display.bounds.y + 50,
+    autoHideMenuBar: true,
+    show: false,
+    titleBarStyle: 'hidden',
+    frame: false,
+    backgroundColor: '#000000',
+    webPreferences: {
+      nodeIntegration: true,
+      enableRemoteModule: true,
+      contextIsolation: false,
+      webviewTag: true,
+      nodeIntegrationInSubFrames: true,
+      nodeIntegrationInWorker: true,
+      media: true,
+    },
+  });
+  viewerWindow = presenterWindow;
+  presenterWindow.displayId = display.id;
+  global.webview = presenterWindow.webContents;
+  presenterWindow.loadURL(`file://${__dirname}/www/viewer.html`);
+  remote.enable(presenterWindow.webContents);
+  presenterWindow.webContents.on('did-finish-load', () => {
+    presenterWindow.webContents.insertCSS(styles);
+    presenterWindow.show();
+    const [width, height] = presenterWindow.getSize();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('external-display', JSON.stringify({ width, height }));
       mainWindow.focus();
       if (showChangelog() && secondaryWindows.changelogWindow.obj) {
         secondaryWindows.changelogWindow.obj.focus();
       }
-      viewerWindow.setFullScreen(true);
+    }
 
-      viewerWindow.webContents.send('wc-webview-enabled');
-      global.webview = viewerWindow.webContents;
-      viewerWindow.webContents.send('update-settings');
+    presenterWindow.setFullScreen(true);
+    presenterWindow.webContents.send('wc-webview-enabled');
+    presenterWindow.webContents.send('update-settings');
 
-      if (typeof ipcData !== 'undefined') {
-        viewerWindow.webContents.send(ipcData.send, ipcData.data);
-      }
-    });
-    viewerWindow.on('enter-full-screen', () => {
+    if (ipcData) {
+      presenterWindow.webContents.send(ipcData.send, ipcData.data);
+    }
+  });
+  presenterWindow.on('enter-full-screen', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.focus();
       if (showChangelog() && secondaryWindows.changelogWindow.obj) {
         secondaryWindows.changelogWindow.obj.focus();
       }
-    });
-    viewerWindow.on('focus', () => {
-      // mainWindow.focus();
-    });
-    viewerWindow.on('closed', () => {
+    }
+  });
+  presenterWindow.on('closed', () => {
+    if (viewerWindow === presenterWindow) {
       viewerWindow = false;
+      global.webview = null;
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('remove-external-display');
       }
+    }
+  });
+  presenterWindow.on('resize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const [width, height] = presenterWindow.getSize();
+      mainWindow.webContents.send('external-display', JSON.stringify({ width, height }));
+    }
+  });
+}
+
+function createProjection(display) {
+  if (!display || projectionWindow) return;
+
+  const projectionHtml = `<!DOCTYPE html>
+    <html><head><meta charset="utf-8"><style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
+    img { width: 100%; height: 100%; object-fit: contain; }
+    </style></head><body><img id="frame"><script>
+    const { ipcRenderer } = require('electron');
+    ipcRenderer.on('projection-frame', (_event, frame) => {
+      document.getElementById('frame').src = frame;
     });
-    viewerWindow.on('resize', () => {
-      const [width, height] = viewerWindow.getSize();
-      mainWindow.webContents.send(
-        'external-display',
-        JSON.stringify({
-          width,
-          height,
-        }),
-      );
-    });
+    </script></body></html>`;
+
+  const quadrantWindow = new BrowserWindow({
+    width: display.size.width,
+    height: display.size.height,
+    x: display.bounds.x,
+    y: display.bounds.y,
+    autoHideMenuBar: true,
+    show: false,
+    titleBarStyle: 'hidden',
+    frame: false,
+    backgroundColor: '#000000',
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  projectionWindow = quadrantWindow;
+  quadrantWindow.displayId = display.id;
+  let captureTimer;
+  quadrantWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(projectionHtml)}`);
+  quadrantWindow.webContents.on('did-finish-load', () => {
+    quadrantWindow.show();
+    quadrantWindow.setFullScreen(true);
+    captureShabadPane(quadrantWindow);
+    captureTimer = setInterval(() => captureShabadPane(quadrantWindow), 250);
+  });
+  quadrantWindow.on('closed', () => {
+    clearInterval(captureTimer);
+    if (projectionWindow === quadrantWindow) {
+      projectionCapturePending = false;
+      projectionWindow = false;
+    }
+  });
+}
+
+function syncViewerWindows() {
+  const displays = getExternalDisplays();
+  const presenterDisplay = displays[0];
+  const projectionDisplay = displays[1] || null;
+
+  if (
+    presenterDisplay &&
+    viewerWindow &&
+    !viewerWindow.isDestroyed() &&
+    viewerWindow.displayId !== presenterDisplay.id
+  ) {
+    const previousPresenterWindow = viewerWindow;
+    viewerWindow = false;
+    global.webview = null;
+    previousPresenterWindow.close();
   }
-  mainWindow.webContents.send('presenter-view');
+  if (presenterDisplay && (!viewerWindow || viewerWindow.isDestroyed())) {
+    createViewer(undefined, presenterDisplay);
+  }
+  if (!presenterDisplay && viewerWindow && !viewerWindow.isDestroyed()) {
+    const previousPresenterWindow = viewerWindow;
+    viewerWindow = false;
+    global.webview = null;
+    previousPresenterWindow.close();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('remove-external-display');
+    }
+  }
+  if (
+    projectionDisplay &&
+    projectionWindow &&
+    !projectionWindow.isDestroyed() &&
+    projectionWindow.displayId !== projectionDisplay.id
+  ) {
+    const previousProjectionWindow = projectionWindow;
+    projectionWindow = false;
+    previousProjectionWindow.close();
+  }
+  if (projectionDisplay && (!projectionWindow || projectionWindow.isDestroyed())) {
+    createProjection(projectionDisplay);
+  }
+  if (!projectionDisplay && projectionWindow && !projectionWindow.isDestroyed()) {
+    const previousProjectionWindow = projectionWindow;
+    projectionWindow = false;
+    previousProjectionWindow.close();
+  }
 }
 
 function writeFileCallback(err) {
@@ -655,12 +775,14 @@ app.on('ready', () => {
   });
 
   mainWindow.webContents.on('dom-ready', () => {
-    if (checkForExternalDisplay()) {
+    const externalDisplays = getExternalDisplays();
+    const externalDisplay = externalDisplays[0];
+    if (externalDisplay) {
       mainWindow.webContents.send(
         'external-display',
         JSON.stringify({
-          width: viewerWindowPos.w,
-          height: viewerWindowPos.h,
+          width: externalDisplay.size.width,
+          height: externalDisplay.size.height,
         }),
       );
     }
@@ -684,9 +806,7 @@ app.on('ready', () => {
         store.set('changelog-seen-count', 1);
       }
     }
-    if (!viewerWindow) {
-      createViewer();
-    }
+    syncViewerWindows();
   });
   mainWindow.loadURL(`file://${__dirname}/www/index.html`);
 
@@ -697,21 +817,20 @@ app.on('ready', () => {
   // Close all other windows if closing the main
   mainWindow.on('close', () => {
     emptyOverlay();
-    if (viewerWindow && !viewerWindow.isDestroyed()) {
-      viewerWindow.close();
-    }
+    if (viewerWindow && !viewerWindow.isDestroyed()) viewerWindow.close();
+    if (projectionWindow && !projectionWindow.isDestroyed()) projectionWindow.close();
+    viewerWindow = false;
+    projectionWindow = false;
+    global.webview = null;
     const changelogWindow = secondaryWindows.changelogWindow.obj;
     if (changelogWindow && !changelogWindow.isDestroyed()) {
       changelogWindow.close();
     }
   });
 
-  // When a display is connected, add a viewer window if it does not already exit
-  screens.on('display-added', () => {
-    if (!viewerWindow) {
-      createViewer();
-    }
-  });
+  screens.on('display-added', () => syncViewerWindows());
+  screens.on('display-removed', () => syncViewerWindows());
+  screens.on('display-metrics-changed', () => syncViewerWindows());
 
   globalShortcut.register('CommandOrControl+Shift+I', () => {
     if (mainWindow) {
@@ -740,9 +859,7 @@ ipcMain.on('enable-wc-webview', (event, data) => {
   const webViewWC = webContents.fromId(parseInt(data, 10));
   remote.enable(webViewWC);
   webViewWC.send('wc-webview-enabled');
-  if (checkForExternalDisplay()) {
-    viewerWindow.send('wc-webview-enabled');
-  }
+  sendToViewerWindows('wc-webview-enabled');
 });
 
 ipcMain.on('cast-session-active', () => {
@@ -761,9 +878,7 @@ ipcMain.on('checkForUpdates', checkForUpdates);
 ipcMain.on('quitAndInstall', () => autoUpdater.quitAndInstall());
 
 ipcMain.on('clear-apv', () => {
-  if (viewerWindow) {
-    viewerWindow.webContents.send('clear-apv');
-  }
+  sendToViewerWindows('clear-apv');
 });
 
 ipcMain.on('save-overlay-settings', (event, overlayPrefs) => {
@@ -782,18 +897,17 @@ io.on('connection', (socket) => {
 });
 
 ipcMain.on('show-line', (event, arg) => {
-  lastLine = JSON.parse(arg);
-  showLine(JSON.parse(arg));
-  if (viewerWindow) {
-    viewerWindow.webContents.send('show-line', JSON.parse(arg));
+  const linePayload = JSON.parse(arg);
+  lastLine = linePayload;
+  showLine(linePayload);
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
+    viewerWindow.webContents.send('show-line', linePayload);
   } else {
-    createViewer({
-      send: 'show-line',
-      data: JSON.parse(arg),
-    });
+    createViewer({ send: 'show-line', data: linePayload });
   }
-  if (JSON.parse(arg).live) {
-    createBroadcastFiles(JSON.parse(arg));
+  syncViewerWindows();
+  if (linePayload.live) {
+    createBroadcastFiles(linePayload);
   }
 });
 
@@ -849,13 +963,10 @@ ipcMain.on('show-text', (event, arg) => {
     showLine(textLine);
   }
 
-  if (viewerWindow) {
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
     viewerWindow.webContents.send('show-text', arg);
   } else {
-    createViewer({
-      send: 'show-text',
-      data: arg,
-    });
+    createViewer({ send: 'show-text', data: arg });
   }
   if (arg.live) {
     createBroadcastFiles(arg);
@@ -863,7 +974,7 @@ ipcMain.on('show-text', (event, arg) => {
 });
 
 ipcMain.on('toggle-viewer-window', (event, arg) => {
-  if (viewerWindow) {
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
     if (arg) {
       viewerWindow.show();
     } else {
@@ -873,26 +984,21 @@ ipcMain.on('toggle-viewer-window', (event, arg) => {
 });
 
 ipcMain.on('presenter-view', (event, arg) => {
-  if (viewerWindow) {
-    if (!arg) {
-      viewerWindow.hide();
-    } else {
-      viewerWindow.show();
-      viewerWindow.setFullScreen(true);
-    }
+  if (!viewerWindow || viewerWindow.isDestroyed()) return;
+  if (!arg) {
+    viewerWindow.hide();
+  } else {
+    viewerWindow.show();
+    viewerWindow.setFullScreen(true);
   }
 });
 
 ipcMain.on('scroll-from-main', (event, arg) => {
-  if (viewerWindow) {
-    viewerWindow.webContents.send('send-scroll', arg);
-  }
+  sendToViewerWindows('send-scroll', arg);
 });
 
 ipcMain.on('next-ang', (event, arg) => {
-  if (viewerWindow) {
-    viewerWindow.webContents.send('show-ang', arg);
-  }
+  sendToViewerWindows('show-ang', arg);
   mainWindow.webContents.send('next-ang', arg);
 });
 
@@ -901,22 +1007,16 @@ ipcMain.on('scroll-pos', (event, arg) => {
 });
 
 ipcMain.on('update-settings', () => {
-  if (viewerWindow) {
-    viewerWindow.webContents.send('update-settings');
-  }
+  sendToViewerWindows('update-settings');
   mainWindow.webContents.send('sync-settings');
 });
 
 ipcMain.on('save-settings', (event, setting) => {
-  if (viewerWindow) {
-    viewerWindow.webContents.send('save-settings', setting);
-  }
+  sendToViewerWindows('save-settings', setting);
 });
 
 ipcMain.on('update-viewer-setting', (event, setting) => {
-  if (viewerWindow) {
-    viewerWindow.webContents.send('update-viewer-setting', setting);
-  }
+  sendToViewerWindows('update-viewer-setting', setting);
 });
 
 ipcMain.on('update-global-setting', (event, setting) => {

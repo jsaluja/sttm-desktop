@@ -56,6 +56,7 @@ function ShabadDeck() {
     translationEnglishSource,
   } = useStoreState((state) => state.userSettings);
   const { containerPadding } = useStoreState((state) => state.viewerSettings);
+  const showContinuousVerses = akhandpatt;
   const [activeVerse, setActiveVerse] = useState([]);
   const [nextVerse, setNextVerse] = useState({});
   const verseRefKeys = useRef([]);
@@ -154,8 +155,8 @@ function ShabadDeck() {
       }
     }
     if (!isMiscSlide && activeVerseId) {
-      if (akhandpatt) {
-        loadShabad(currentShabad, activeVerseId).then((verses) => setActiveVerse(verses));
+      if (showContinuousVerses) {
+        loadShabad(currentShabad).then((verses) => setActiveVerse(verses));
       } else {
         loadShabadVerse(currentShabad, activeVerseId).then((result) =>
           result.map((activeRes) => setActiveVerse([activeRes])),
@@ -238,6 +239,7 @@ function ShabadDeck() {
   }, [
     activeShabadId,
     activeVerseId,
+    showContinuousVerses,
     sundarGutkaBaniId,
     ceremonyId,
     akhandpatt,
@@ -249,7 +251,7 @@ function ShabadDeck() {
   ]);
 
   useEffect(() => {
-    if (activeVerseId && akhandpatt) {
+    if (activeVerseId && showContinuousVerses) {
       const verseDOM = verseRefs.current[activeVerseId];
 
       if (verseDOM) {
@@ -259,7 +261,7 @@ function ShabadDeck() {
         });
       }
     }
-  }, [activeVerseId, akhandpatt, verseRefKeys.current]);
+  }, [activeVerseId, showContinuousVerses, verseRefKeys.current]);
 
   useEffect(() => {
     if (isMiscSlide) {
@@ -297,7 +299,7 @@ function ShabadDeck() {
           currentWorkspace === i18n.t('WORKSPACES.SINGLE_DISPLAY') && 'single-display-mode',
           miscSlideText === '' && 'empty-slide',
           minimizedBySingleDisplay && 'single-display-minimized',
-          akhandpatt && !isMiscSlide && 'akhandpatt-view',
+          showContinuousVerses && !isMiscSlide && 'akhandpatt-view',
           platform === 'win32' && 'win32',
           `theme-${getCurrentThemeInstance().key}`,
         )}
@@ -323,6 +325,7 @@ function ShabadDeck() {
                 verseObj={activeVerseObj}
                 nextLineObj={nextVerse}
                 isMiscSlide={isMiscSlide}
+                continuousView={showContinuousVerses}
                 updateVerseRef={updateVerseRef}
                 slideIndex={index}
               />

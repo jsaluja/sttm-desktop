@@ -195,6 +195,10 @@ export const ShabadText = ({
       JSON.stringify({
         Line: overlayVerse,
         live: liveFeed,
+        activeVerseId,
+        baniType,
+        shabadId,
+        currentPane,
       }),
     );
     if (

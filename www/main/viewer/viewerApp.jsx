@@ -11,6 +11,8 @@ const remote = require('@electron/remote');
 
 const { i18n } = remote.require('./app');
 
+const ViewerContent = () => <ShabadDeck />;
+
 const ViewerApp = () => {
   chromecast(
     (receivers) =>
@@ -75,7 +77,7 @@ const ViewerApp = () => {
   });
   return (
     <StoreProvider store={ViewerState}>
-      <ShabadDeck />
+      <ViewerContent />
     </StoreProvider>
   );
 };

@@ -63,4 +63,32 @@ global.platform.ipc.on('update-viewer-setting', (_event, setting) => {
   ViewerState.getActions()[settingType][actionName](payload);
 });
 
+global.platform.ipc.on('show-line', (_event, payload) => {
+  if (!payload?.Line?.Gurmukhi) {
+    return;
+  }
+
+  const navigatorActions = ViewerState.getActions().navigator;
+  const selectedVerseId = payload.activeVerseId ?? payload.Line.ID;
+  navigatorActions.setActiveVerseId(selectedVerseId);
+  navigatorActions.setIsMiscSlide(false);
+  if (payload.currentPane) {
+    navigatorActions.setActivePaneId(payload.currentPane);
+  }
+
+  if (payload.baniType === 'bani') {
+    navigatorActions.setIsSundarGutkaBani(true);
+    navigatorActions.setSundarGutkaBaniId(payload.shabadId);
+    navigatorActions.setIsCeremonyBani(false);
+  } else if (payload.baniType === 'ceremony') {
+    navigatorActions.setIsSundarGutkaBani(false);
+    navigatorActions.setIsCeremonyBani(true);
+    navigatorActions.setCeremonyId(payload.shabadId);
+  } else {
+    navigatorActions.setIsSundarGutkaBani(false);
+    navigatorActions.setIsCeremonyBani(false);
+    navigatorActions.setActiveShabadId(payload.shabadId);
+  }
+});
+
 export default ViewerState;

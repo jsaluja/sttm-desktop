@@ -16,13 +16,17 @@
         let root = null;
 
         ipcRenderer.on('wc-webview-enabled', () => {
-          const app = require('./js/viewer/viewerApp.js').default;
-          const { createRoot } = require('react-dom/client');
+          try {
+            const app = require('./js/viewer/viewerApp.js').default;
+            const { createRoot } = require('react-dom/client');
 
-          if (!root) {
-            root = createRoot(document.getElementById('viewer-container'));
+            if (!root) {
+              root = createRoot(document.getElementById('viewer-container'));
+            }
+            root.render(app());
+          } catch (error) {
+            ipcRenderer.send('viewer-boot-error', error.stack || error.message);
           }
-          root.render(app());
         });
     </script>
   </body>
