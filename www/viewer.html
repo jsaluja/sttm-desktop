@@ -10,6 +10,11 @@
     <link rel="stylesheet" href="assets/css/vendor/tingle.css" />
   </head>
   <body class="viewer">
+    <script>
+      if (new URLSearchParams(window.location.search).has('paneProjection')) {
+        document.body.classList.add('viewer-pane-projection');
+      }
+    </script>
     <div id="viewer-container"></div>
     <script>
         const { ipcRenderer } = require('electron');

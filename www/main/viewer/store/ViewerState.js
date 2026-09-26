@@ -101,16 +101,29 @@ global.platform.ipc.on('projection-range', (_event, range) => {
 });
 
 global.platform.ipc.on('show-line', (_event, payload) => {
-  if (!payload?.Line?.Gurmukhi) {
-    return;
+  // Display 2: always push active verse so highlight + scroll track the controller.
+  const selectedVerseId = payload?.activeVerseId ?? payload?.Line?.ID ?? null;
+  const navigatorActions = ViewerState.getActions().navigator;
+
+  if (selectedVerseId != null) {
+    navigatorActions.setActiveVerseId(selectedVerseId);
+  }
+  navigatorActions.setIsMiscSlide(false);
+
+  if (payload?.currentPane) {
+    navigatorActions.setActivePaneId(payload.currentPane);
+    const setPane = navigatorActions[`setPane${payload.currentPane}`];
+    const paneState = ViewerState.getState().navigator[`pane${payload.currentPane}`];
+    if (setPane && paneState && selectedVerseId != null) {
+      setPane({
+        ...paneState,
+        activeVerse: selectedVerseId,
+      });
+    }
   }
 
-  const navigatorActions = ViewerState.getActions().navigator;
-  const selectedVerseId = payload.activeVerseId ?? payload.Line.ID;
-  navigatorActions.setActiveVerseId(selectedVerseId);
-  navigatorActions.setIsMiscSlide(false);
-  if (payload.currentPane) {
-    navigatorActions.setActivePaneId(payload.currentPane);
+  if (!payload?.shabadId && !payload?.baniType) {
+    return;
   }
 
   if (payload.baniType === 'bani') {
@@ -121,7 +134,7 @@ global.platform.ipc.on('show-line', (_event, payload) => {
     navigatorActions.setIsSundarGutkaBani(false);
     navigatorActions.setIsCeremonyBani(true);
     navigatorActions.setCeremonyId(payload.shabadId);
-  } else {
+  } else if (payload.shabadId) {
     navigatorActions.setIsSundarGutkaBani(false);
     navigatorActions.setIsCeremonyBani(false);
     navigatorActions.setActiveShabadId(payload.shabadId);
@@ -129,3 +142,4 @@ global.platform.ipc.on('show-line', (_event, payload) => {
 });
 
 export default ViewerState;
+

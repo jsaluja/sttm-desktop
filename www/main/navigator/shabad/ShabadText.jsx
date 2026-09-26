@@ -6,7 +6,6 @@ import PropTypes from 'prop-types';
 
 import { loadShabad, loadBani, loadCeremony } from '../utils';
 import { ShabadVerse } from '../../common/sttm-ui';
-import { useRecordingState } from '../../common/hooks';
 import {
   changeHomeVerse,
   changeVerse,
@@ -45,9 +44,6 @@ export const ShabadText = ({
 
   const virtuosoRef = useRef(null);
   const activeVerseRef = useRef(null);
-  const lastProjectionSyncRef = useRef({ index: null, startIndex: null });
-  const isRecording = useRecordingState();
-  const projectionRange = useStoreState((state) => state.projection?.range);
 
   const {
     activeVerseId,
@@ -82,7 +78,6 @@ export const ShabadText = ({
   } = useStoreActions((actions) => actions.navigator);
 
   const updateTraversedVerse = (newTraversedVerse, verseIndex, crossPlatformId = null) => {
-    if (isProjection) return;
     if (isMiscSlide) {
       setIsMiscSlide(false);
     }
@@ -124,35 +119,28 @@ export const ShabadText = ({
       activeShabadId,
       paneAttributes,
     });
-    if (isRecording) {
-      ipcRenderer.send('recording-event', { event: 'verse', verseId: newTraversedVerse });
-    }
   };
 
   const updateHomeVerse = (verseIndex) => {
-    if (!isProjection) changeHomeVerse(verseIndex, { paneAttributes, setPaneAttributes });
+    changeHomeVerse(verseIndex, { paneAttributes, setPaneAttributes });
   };
 
   const setVerseList = (verseList) => {
     if (verseList.length) {
       setRawVerses(verseList);
-      if (!isProjection) {
-        saveToHistory(
-          shabadId,
-          verseList,
-          baniType,
-          { verseHistory, setVerseHistory, baniLength },
-          initialVerseId,
-        );
-      }
+      saveToHistory(
+        shabadId,
+        verseList,
+        baniType,
+        { verseHistory, setVerseHistory, baniLength },
+        initialVerseId,
+      );
       const filtered = filterRequiredVerseItems(verseList);
       setFilteredItems(filtered);
+      const resumeVerseId = paneAttributes?.activeVerse || filtered[0].verseId;
       if (filtered.length > 0) {
-        const resumeVerseId = paneAttributes?.activeVerse || filtered[0].verseId;
         const resumeVerseIndex = filtered.findIndex((v) => v.verseId === resumeVerseId);
-        if (isProjection && resumeVerseIndex >= 0) {
-          setActiveVerse({ [resumeVerseIndex]: resumeVerseId });
-        } else if (resumeVerseIndex >= 0) {
+        if (resumeVerseIndex >= 0) {
           updateTraversedVerse(resumeVerseId, resumeVerseIndex);
         } else {
           updateTraversedVerse(filtered[0].verseId, 0);
@@ -174,15 +162,18 @@ export const ShabadText = ({
   useEffect(() => {
     if (filteredItems.length) {
       if (isProjection) {
+        const liveActiveId = activeVerseId || paneAttributes?.activeVerse;
         const projectedActiveIndex = filteredItems.findIndex(
-          (verse) => verse.verseId === paneAttributes?.activeVerse,
+          (verse) => verse.verseId === liveActiveId,
         );
         if (projectedActiveIndex >= 0) {
-          setActiveVerse({ [projectedActiveIndex]: paneAttributes.activeVerse });
+          setActiveVerse({ [projectedActiveIndex]: liveActiveId });
         }
         return;
       }
-      setTimeout(() => scrollToVerse(initialVerseId, filteredItems, virtuosoRef), 100);
+      setTimeout(() => {
+        scrollToVerse(initialVerseId, filteredItems, virtuosoRef);
+      }, 100);
       const initialVerseIndex = filteredItems.findIndex(
         (verse) => verse.verseId === initialVerseId,
       );
@@ -198,7 +189,7 @@ export const ShabadText = ({
         updateTraversedVerse(initialVerseId, initialVerseIndex);
       }
     }
-  }, [filteredItems, isProjection, paneAttributes?.activeVerse]);
+  }, [filteredItems, isProjection, paneAttributes?.activeVerse, activeVerseId]);
 
   useEffect(() => {
     if (isProjection) return;
@@ -225,11 +216,12 @@ export const ShabadText = ({
         }),
       );
     }
-    const paneIsActiveShabad =
-      (isCeremonyBani && ceremonyId === paneAttributes.activeShabad) ||
-      (isSundarGutkaBani && sundarGutkaBaniId === paneAttributes.activeShabad) ||
-      (!isSundarGutkaBani && !isCeremonyBani && activeShabadId === paneAttributes.activeShabad);
-    if (!isProjection && paneIsActiveShabad) {
+    if (
+      !isProjection &&
+      ((isCeremonyBani && ceremonyId === paneAttributes.activeShabad) ||
+        (isSundarGutkaBani && sundarGutkaBaniId === paneAttributes.activeShabad) ||
+        (!isSundarGutkaBani && !isCeremonyBani && activeShabadId === paneAttributes.activeShabad))
+    ) {
       if (lineNumber !== null && filteredItems[lineNumber - 1]?.verseId === activeVerseId) {
         setActiveVerse({ [lineNumber - 1]: activeVerseId });
         scrollToVerse(activeVerseId, filteredItems, virtuosoRef);
@@ -237,45 +229,48 @@ export const ShabadText = ({
     }
   }, [rawVerses, activeShabadId, activeVerseId, sundarGutkaBaniId, ceremonyId, isProjection]);
 
+  // Display 2 only: follow active line without center-jump; pin near EOF.
   useEffect(() => {
-    if (
-      !isProjection ||
-      projectionRange?.paneId !== currentPane ||
-      !filteredItems.length ||
-      !virtuosoRef.current
-    ) {
-      return;
-    }
-
-    const activeIndex = Object.keys(activeVerse).length
-      ? Number(Object.keys(activeVerse)[0])
-      : null;
-
-    if (activeIndex === null) {
-      return;
-    }
-
-    const visibleStart = projectionRange.startIndex ?? 0;
-    const syncedRange = lastProjectionSyncRef.current;
-    if (
-      syncedRange.index === activeIndex &&
-      syncedRange.startIndex === visibleStart &&
-      syncedRange.startIndex !== null
-    ) {
-      return;
-    }
-
-    lastProjectionSyncRef.current = {
-      index: activeIndex,
-      startIndex: visibleStart,
+    if (!isProjection || !filteredItems.length) return undefined;
+    const liveActiveId = activeVerseId || paneAttributes?.activeVerse;
+    if (liveActiveId == null) return undefined;
+    const activeVerseIndex = filteredItems.findIndex((verse) => verse.verseId === liveActiveId);
+    if (activeVerseIndex < 0) return undefined;
+    setActiveVerse({ [activeVerseIndex]: liveActiveId });
+    const lastIndex = filteredItems.length - 1;
+    const nearEnd = activeVerseIndex >= Math.max(0, lastIndex - 6);
+    const apply = () => {
+      const api = virtuosoRef.current;
+      if (!api) return;
+      if (nearEnd) {
+        if (typeof api.scrollTo === 'function') {
+          api.scrollTo({ top: Number.MAX_SAFE_INTEGER, behavior: 'auto' });
+        }
+        if (typeof api.scrollToIndex === 'function') {
+          api.scrollToIndex({ index: activeVerseIndex, align: 'end', behavior: 'auto' });
+        }
+        return;
+      }
+      if (typeof api.scrollIntoView === 'function') {
+        api.scrollIntoView({
+          index: activeVerseIndex,
+          behavior: 'auto',
+          done: () => {
+            const el = activeVerseRef.current;
+            if (el && typeof el.scrollIntoView === 'function') {
+              el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }
+          },
+        });
+      }
     };
-
-    virtuosoRef.current.scrollToIndex({
-      index: Math.min(visibleStart, filteredItems.length - 1),
-      align: 'start',
-      behavior: 'auto',
-    });
-  }, [currentPane, filteredItems.length, isProjection, projectionRange, activeVerse]);
+    const t1 = setTimeout(apply, 0);
+    const t2 = setTimeout(apply, 80);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [isProjection, filteredItems, activeVerseId, paneAttributes?.activeVerse]);
 
   const getVerse = (direction) => {
     let verseIndex = null;
@@ -367,7 +362,7 @@ export const ShabadText = ({
         });
       }
     }
-  }, [isProjection, shortcuts]);
+  }, [shortcuts]);
 
   useEffect(() => {
     if (isProjection) return undefined;
@@ -393,6 +388,19 @@ export const ShabadText = ({
           data={filteredItems}
           ref={virtuosoRef}
           totalCount={filteredItems.length}
+          // Only pass projection extras when isProjection. Never pass components={undefined}
+          // — react-virtuoso crashes reading EmptyPlaceholder on undefined components.
+          {...(isProjection
+            ? {
+                style: { height: '100%', width: '100%' },
+                increaseViewportBy: { top: 200, bottom: 400 },
+                components: {
+                  Footer: () => (
+                    <div style={{ height: 280, flexShrink: 0 }} aria-hidden="true" />
+                  ),
+                },
+              }
+            : {})}
           rangeChanged={(range) => {
             if (projectionSource && !isProjection) {
               ipcRenderer.send('projection-range', { paneId: currentPane, ...range });

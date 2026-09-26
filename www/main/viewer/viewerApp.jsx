@@ -51,12 +51,17 @@ const PaneProjection = () => {
     return () => clearTimeout(retryTimer);
   }, [projectionReady]);
 
+  // Need controller list box size so we can scale rows to the earlier (readable) size.
   if (!projectionReady || !paneWidth || !paneHeight) {
     return <div className={`pane-projection-screen theme-${theme}`} />;
   }
 
-  const scale = Math.min(screenSize.width / paneWidth, screenSize.height / paneHeight);
   const multiPaneId = currentWorkspace === i18n.t('WORKSPACES.MULTI_PANE') ? 1 : false;
+
+  // Uniform scale from controller list size -> readable row size (same as before letterbox fix).
+  // Screen/stage background matches the pane so unused edges are not blue letterbox bars.
+  const scale = Math.min(screenSize.width / paneWidth, screenSize.height / paneHeight);
+
   return (
     <div className={`pane-projection-screen theme-${theme}`}>
       <div

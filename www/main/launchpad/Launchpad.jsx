@@ -24,7 +24,15 @@ const remote = require('@electron/remote');
 const { i18n } = remote.require('./app');
 const main = remote.require('./app');
 
-const serializeState = (state) => JSON.parse(JSON.stringify(state));
+const serializeState = (state) => {
+  try {
+    return JSON.parse(JSON.stringify(state));
+  } catch (err) {
+    // Never let projection sync crash the main controller UI.
+    console.error('[projection] state serialize failed', err);
+    return {};
+  }
+};
 
 export const InputContext = createContext();
 

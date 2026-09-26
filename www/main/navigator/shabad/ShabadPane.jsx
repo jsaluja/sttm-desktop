@@ -21,12 +21,15 @@ const ShabadPane = ({
   const paneId = multiPaneId || defaultPaneId;
 
   useEffect(() => {
+    // Report full pane size for Display 2 scale only. Do not change controller layout.
     if (!projectionSource || isProjection || !paneRef.current) return undefined;
 
     const reportPaneSize = () => {
       if (!paneRef.current) return;
       const { width, height } = paneRef.current.getBoundingClientRect();
-      ipcRenderer.send('projection-viewport', { paneId, width, height });
+      if (width > 0 && height > 0) {
+        ipcRenderer.send('projection-viewport', { paneId, width, height });
+      }
     };
     const observer = new ResizeObserver(reportPaneSize);
     observer.observe(paneRef.current);
@@ -36,7 +39,7 @@ const ShabadPane = ({
   }, [isProjection, paneId, projectionSource]);
 
   return (
-    <div ref={paneRef} style={style} className={`pane-container shabad-pane ${className}`}>
+    <div ref={paneRef} style={style} className={`pane-container shabad-pane ${className || ''}`}>
       <Pane
         header={multiPaneId ? MultiPaneHeader : ShabadHeader}
         content={MultiPaneContent}
