@@ -254,12 +254,22 @@ function ShabadDeck() {
     if (activeVerseId && showContinuousVerses) {
       const verseDOM = verseRefs.current[activeVerseId];
 
-      if (verseDOM) {
-        verseDOM.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center',
-        });
+      if (!verseDOM) {
+        return;
       }
+
+      const rect = verseDOM.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+      const isVisible = rect.top >= 0 && rect.bottom <= viewportHeight;
+
+      if (isVisible) {
+        return;
+      }
+
+      verseDOM.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
     }
   }, [activeVerseId, showContinuousVerses, verseRefKeys.current]);
 

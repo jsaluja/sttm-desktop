@@ -44,6 +44,7 @@ export const ShabadText = ({
 
   const virtuosoRef = useRef(null);
   const activeVerseRef = useRef(null);
+  const lastProjectionSyncRef = useRef({ index: null, startIndex: null });
   const projectionRange = useStoreState((state) => state.projection?.range);
 
   const {
@@ -240,11 +241,36 @@ export const ShabadText = ({
     ) {
       return;
     }
+
+    const activeIndex = Object.keys(activeVerse).length
+      ? Number(Object.keys(activeVerse)[0])
+      : null;
+
+    if (activeIndex === null) {
+      return;
+    }
+
+    const visibleStart = projectionRange.startIndex ?? 0;
+    const syncedRange = lastProjectionSyncRef.current;
+    if (
+      syncedRange.index === activeIndex &&
+      syncedRange.startIndex === visibleStart &&
+      syncedRange.startIndex !== null
+    ) {
+      return;
+    }
+
+    lastProjectionSyncRef.current = {
+      index: activeIndex,
+      startIndex: visibleStart,
+    };
+
     virtuosoRef.current.scrollToIndex({
-      index: Math.min(projectionRange.startIndex, filteredItems.length - 1),
+      index: Math.min(visibleStart, filteredItems.length - 1),
       align: 'start',
+      behavior: 'auto',
     });
-  }, [currentPane, filteredItems.length, isProjection, projectionRange]);
+  }, [currentPane, filteredItems.length, isProjection, projectionRange, activeVerse]);
 
   const getVerse = (direction) => {
     let verseIndex = null;
