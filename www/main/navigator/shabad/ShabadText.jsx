@@ -44,6 +44,7 @@ export const ShabadText = ({
 
   const virtuosoRef = useRef(null);
   const activeVerseRef = useRef(null);
+  const listScrollRef = useRef(null);
 
   const {
     activeVerseId,
@@ -229,7 +230,9 @@ export const ShabadText = ({
     }
   }, [rawVerses, activeShabadId, activeVerseId, sundarGutkaBaniId, ceremonyId, isProjection]);
 
-  // Display 2 only: follow active line without center-jump; pin near EOF.
+  // Display 2: full DOM list (no Virtuoso windowing). Scroll active row into view.
+  // Virtuoso only mounts viewport rows — with scaled stage height, bottom rows never
+  // enter the item-list and cannot scroll into view. Full list fixes that.
   useEffect(() => {
     if (!isProjection || !filteredItems.length) return undefined;
     const liveActiveId = activeVerseId || paneAttributes?.activeVerse;
@@ -237,38 +240,29 @@ export const ShabadText = ({
     const activeVerseIndex = filteredItems.findIndex((verse) => verse.verseId === liveActiveId);
     if (activeVerseIndex < 0) return undefined;
     setActiveVerse({ [activeVerseIndex]: liveActiveId });
-    const lastIndex = filteredItems.length - 1;
-    const nearEnd = activeVerseIndex >= Math.max(0, lastIndex - 6);
+
     const apply = () => {
-      const api = virtuosoRef.current;
-      if (!api) return;
-      if (nearEnd) {
-        if (typeof api.scrollTo === 'function') {
-          api.scrollTo({ top: Number.MAX_SAFE_INTEGER, behavior: 'auto' });
-        }
-        if (typeof api.scrollToIndex === 'function') {
-          api.scrollToIndex({ index: activeVerseIndex, align: 'end', behavior: 'auto' });
-        }
+      const el = activeVerseRef.current;
+      const scroller = listScrollRef.current;
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
         return;
       }
-      if (typeof api.scrollIntoView === 'function') {
-        api.scrollIntoView({
-          index: activeVerseIndex,
-          behavior: 'auto',
-          done: () => {
-            const el = activeVerseRef.current;
-            if (el && typeof el.scrollIntoView === 'function') {
-              el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-            }
-          },
-        });
+      if (scroller && el) {
+        const rowTop = el.offsetTop;
+        const rowHeight = el.offsetHeight || 0;
+        const viewHeight = scroller.clientHeight || 0;
+        scroller.scrollTop = Math.max(0, rowTop - (viewHeight - rowHeight) / 2);
       }
     };
+
     const t1 = setTimeout(apply, 0);
-    const t2 = setTimeout(apply, 80);
+    const t2 = setTimeout(apply, 50);
+    const t3 = setTimeout(apply, 150);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
+      clearTimeout(t3);
     };
   }, [isProjection, filteredItems, activeVerseId, paneAttributes?.activeVerse]);
 
@@ -380,51 +374,48 @@ export const ShabadText = ({
     };
   }, [autoplayToggle, autoplayDelay, isProjection]);
 
+  const renderVerse = (index, verseObj) => {
+    const { verseId, verse, english } = verseObj;
+    return (
+      <ShabadVerse
+        key={verseId != null ? verseId : index}
+        activeVerse={activeVerse}
+        isHomeVerse={paneAttributes.homeVerse}
+        lineNumber={index}
+        versesRead={paneAttributes.versesRead}
+        activeVerseRef={activeVerseRef}
+        verse={verse}
+        englishVerse={english}
+        verseId={verseId}
+        changeHomeVerse={updateHomeVerse}
+        updateTraversedVerse={updateTraversedVerse}
+      />
+    );
+  };
+
   return (
     <div className="shabad-list">
-      <div className="verse-block">
-        <Virtuoso
-          id={`shabad-text-${currentPane}`}
-          data={filteredItems}
-          ref={virtuosoRef}
-          totalCount={filteredItems.length}
-          // Only pass projection extras when isProjection. Never pass components={undefined}
-          // — react-virtuoso crashes reading EmptyPlaceholder on undefined components.
-          {...(isProjection
-            ? {
-                style: { height: '100%', width: '100%' },
-                increaseViewportBy: { top: 200, bottom: 400 },
-                components: {
-                  Footer: () => (
-                    <div style={{ height: 280, flexShrink: 0 }} aria-hidden="true" />
-                  ),
-                },
+      <div className="verse-block" ref={isProjection ? listScrollRef : undefined}>
+        {isProjection ? (
+          // Full list on Display 2 — every row is in the DOM (no Virtuoso windowing).
+          // Controller keeps Virtuoso for performance; projection needs last lines reachable.
+          <div className="shabad-list-full" data-testid="shabad-item-list" style={{ width: '100%' }}>
+            {filteredItems.map((verseObj, index) => renderVerse(index, verseObj))}
+          </div>
+        ) : (
+          <Virtuoso
+            id={`shabad-text-${currentPane}`}
+            data={filteredItems}
+            ref={virtuosoRef}
+            totalCount={filteredItems.length}
+            rangeChanged={(range) => {
+              if (projectionSource && !isProjection) {
+                ipcRenderer.send('projection-range', { paneId: currentPane, ...range });
               }
-            : {})}
-          rangeChanged={(range) => {
-            if (projectionSource && !isProjection) {
-              ipcRenderer.send('projection-range', { paneId: currentPane, ...range });
-            }
-          }}
-          itemContent={(index, verseObj) => {
-            const { verseId, verse, english } = verseObj;
-            return (
-              <ShabadVerse
-                key={index}
-                activeVerse={activeVerse}
-                isHomeVerse={paneAttributes.homeVerse}
-                lineNumber={index}
-                versesRead={paneAttributes.versesRead}
-                activeVerseRef={activeVerseRef}
-                verse={verse}
-                englishVerse={english}
-                verseId={verseId}
-                changeHomeVerse={updateHomeVerse}
-                updateTraversedVerse={updateTraversedVerse}
-              />
-            );
-          }}
-        />
+            }}
+            itemContent={(index, verseObj) => renderVerse(index, verseObj)}
+          />
+        )}
       </div>
     </div>
   );

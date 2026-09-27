@@ -110,7 +110,8 @@ body.viewer-pane-projection #root {
   height: 100% !important;
   max-height: none !important;
   min-height: 0;
-  overflow: hidden !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
   scrollbar-width: none;
   margin: 0 !important;
   padding: 0 !important;
@@ -121,13 +122,13 @@ body.viewer-pane-projection #root {
   width: 0;
   height: 0;
 }
-/* Size Virtuoso root only — never force every viewport child to 100% height
-   (that collapses row measure and breaks scroll / highlight). */
-.pane-projection-stage .verse-block > div {
-  height: 100% !important;
+/* Full list container (Display 2) — natural height so last rows can scroll into view */
+.pane-projection-stage .verse-block .shabad-list-full {
+  width: 100%;
   max-height: none !important;
-  width: 100% !important;
 }
+/* Legacy Virtuoso path (if still mounted): size root only — never force every child to 100% */
+.pane-projection-stage .verse-block > div[data-testid="virtuoso-scroller"],
 .pane-projection-stage .verse-block [data-virtuoso-scroller] {
   height: 100% !important;
   max-height: none !important;
@@ -139,7 +140,6 @@ body.viewer-pane-projection #root {
   width: 0;
   height: 0;
 }
-/* Let list total height exceed viewport so last rows can scroll into view */
 .pane-projection-stage .verse-block [data-viewport-type] {
   max-height: none !important;
 }
