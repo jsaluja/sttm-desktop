@@ -15,11 +15,27 @@ const { i18n } = remote.require('./app');
 
 const ShabadHeader = ({ data = {} }) => {
   const [showViewer, setShowViewer] = useState(true);
+  const [canSwapDisplays, setCanSwapDisplays] = useState(false);
   const { defaultPaneId } = useStoreState((state) => state.userSettings);
 
   useEffect(() => {
     if (!data.isProjection) ipcRenderer.send('toggle-viewer-window', showViewer);
   }, [data.isProjection, showViewer]);
+
+  useEffect(() => {
+    if (data.isProjection) return undefined;
+
+    const onDualDisplayState = (_event, state) => {
+      setCanSwapDisplays(Boolean(state && state.canSwap));
+    };
+
+    ipcRenderer.on('dual-display-state', onDualDisplayState);
+    ipcRenderer.send('dual-display-state-request');
+
+    return () => {
+      ipcRenderer.removeListener('dual-display-state', onDualDisplayState);
+    };
+  }, [data.isProjection]);
 
   return (
     <div className="shabad-pane-header">
@@ -41,6 +57,16 @@ const ShabadHeader = ({ data = {} }) => {
           </>
         )}
       </button>
+      {canSwapDisplays && !data.isProjection && (
+        <button
+          className="button toggle-viewer-btn swap-displays-btn"
+          onClick={() => ipcRenderer.send('swap-display-roles')}
+          title={i18n.t('SHABAD_PANE.SWAP_DISPLAYS_TOOLTIP')}
+        >
+          <img src="assets/img/icons/monitor.png" />
+          <p>{i18n.t('SHABAD_PANE.SWAP_DISPLAYS')}</p>
+        </button>
+      )}
       <ArrowIcon paneId={defaultPaneId} />
     </div>
   );
