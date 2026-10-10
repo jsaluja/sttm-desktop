@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
 
 import PropTypes from 'prop-types';
-
-const remote = require('@electron/remote');
-
-const { i18n } = remote.require('./app');
+import { i18n } from '../../common/i18n';
 
 const SettingsNav = ({ settingsNavObj }) => {
   const [activeTab, setActiveTab] = useState('slide-layout');
@@ -17,6 +14,8 @@ const SettingsNav = ({ settingsNavObj }) => {
         return activeTab === 'app-settings' ? 'settings-nav-active' : '';
       case 'bani-and-languages':
         return activeTab === 'bani-and-languages' ? 'settings-nav-active' : '';
+      case 'recording-settings':
+        return activeTab === 'recording-settings' ? 'settings-nav-active' : '';
       default:
         return activeTab === 'slide-layout' ? 'settings-nav-active' : '';
     }

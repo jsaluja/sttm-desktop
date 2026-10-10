@@ -1,4 +1,5 @@
 const electron = require('electron');
+const { spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const express = require('express');
@@ -39,6 +40,9 @@ const maxChangeLogSeenCount = 5;
 /* eslint-disable import/no-unresolved, import/extensions */
 const Store = require('./www/js/store');
 const {
+  registerRetrievalService,
+} = require('./www/js/addons/voice-follow/engine/retrieval/main-service');
+const {
   savedSettingsCamelCase,
 } = require('./www/js/common/store/user-settings/get-saved-user-settings');
 /* eslint-enable */
@@ -73,7 +77,6 @@ const {
   BrowserWindow,
   dialog,
   ipcMain,
-  safeStorage,
   globalShortcut,
   systemPreferences,
   shell,
@@ -95,6 +98,41 @@ if (currentTheme === undefined) {
 }
 
 let mainWindow;
+const voiceFollowRetrieval = registerRetrievalService({
+  ipcMain,
+  userData: app.getPath('userData'),
+  isAllowed: (sender) =>
+    !!mainWindow && !mainWindow.isDestroyed() && sender === mainWindow.webContents,
+});
+app.once('will-quit', () => {
+  voiceFollowRetrieval.dispose().catch(() => {});
+});
+// Tester build: hold the quit up to 20 s to upload the session that just ended.
+// Anything going wrong here must never stop the app from quitting.
+let shadowFlushed = false;
+app.on('will-quit', (e) => {
+  if (shadowFlushed) return;
+  shadowFlushed = true;
+  e.preventDefault();
+  try {
+    // eslint-disable-next-line global-require
+    const shadowUploader = require('./www/js/addons/voice-follow/shadow/uploader');
+    // The second quit must come on a later turn of the event loop: a quit issued while
+    // this will-quit is still being dispatched (nothing left to upload resolves at once)
+    // is swallowed and the app stays open with no window. Whatever happens, exit.
+    const quitAgain = () => setTimeout(() => app.quit(), 50);
+    const hardExit = setTimeout(() => app.exit(0), 30000);
+    shadowUploader
+      .flush(path.join(app.getPath('userData'), 'voice-follow', 'shadow'), 20000)
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(hardExit);
+        quitAgain();
+      });
+  } catch (_) {
+    setTimeout(() => app.quit(), 50);
+  }
+});
 let viewerWindow = false;
 let projectionWindow = false;
 /** Embedded controller <webview> (in-app preview) — kept separate from external BrowserWindows */
@@ -110,6 +148,207 @@ let pinnedPresenterDisplayId = null;
 let pinnedProjectionDisplayId = null;
 let startChangelogOpenTimer;
 let endChangelogOpenTimer;
+
+const recordingsDir = path.join(__dirname, 'recordings');
+const recordingUploaderScript = path.join(__dirname, 'scripts', 'push_sttm_desktop_recording.py');
+let isRecording = false;
+let recordingStartTime = null;
+let recordingSessionId = null;
+let recordingSessionDir = null;
+let recordingEvents = [];
+let recordingDatasetType = 'kirtan';
+let uploadStartedAt = null;
+
+function recordingPrefs() {
+  const token = retrieveHfTokenKhalisSafe();
+  return {
+    gurdwaraName: store.get('recording.gurdwaraName') || '',
+    hfTokenKhalis: token || '',
+    hfTokenKhalisSaved: Boolean(token),
+  };
+}
+
+function retrieveHfTokenKhalisSafe() {
+  try {
+    return retrieveHfTokenKhalis();
+  } catch (error) {
+    return null;
+  }
+}
+
+function trackRecording(action, fields = {}) {
+  if (!global.analytics) return;
+  const { gurdwaraName } = recordingPrefs();
+  global.analytics.trackEvent({
+    category: 'recording',
+    action,
+    label: gurdwaraName || '',
+    value: fields.value == null ? '' : String(fields.value),
+  });
+}
+
+function recordingReady() {
+  const prefs = recordingPrefs();
+  return Boolean(prefs.gurdwaraName) && prefs.hfTokenKhalisSaved;
+}
+
+function saveHfTokenKhalis(token) {
+  store.set('recording.hfTokenKhalis', token);
+}
+
+function retrieveHfTokenKhalis() {
+  return store.get('recording.hfTokenKhalis') || null;
+}
+
+function writeRecordingEventsCsv() {
+  const header = 'verseId,timestamp_seconds\n';
+  const rows = recordingEvents.map((e) => `${e.verseId ?? ''},${e.t.toFixed(3)}`).join('\n');
+  fs.mkdirSync(recordingSessionDir, { recursive: true });
+  fs.writeFileSync(path.join(recordingSessionDir, `${recordingSessionId}.csv`), `${header}${rows}`);
+}
+
+function pythonCandidates() {
+  if (process.env.RECORDING_PYTHON) return [process.env.RECORDING_PYTHON];
+  if (process.platform === 'win32') return ['py', 'python', 'python3'];
+  return ['python3', 'python'];
+}
+
+function findPython() {
+  return new Promise((resolve) => {
+    const candidates = pythonCandidates();
+    const tryNext = (index) => {
+      if (index >= candidates.length) {
+        resolve(null);
+        return;
+      }
+      const command = candidates[index];
+      const args = command === 'py' ? ['-3', '-c', 'import sys'] : ['-c', 'import sys'];
+      const probe = spawn(command, args, { windowsHide: true });
+      let settled = false;
+      const finish = (found) => {
+        if (settled) return;
+        settled = true;
+        if (found) resolve({ command, prefix: command === 'py' ? ['-3'] : [] });
+        else tryNext(index + 1);
+      };
+      probe.on('error', () => finish(false));
+      probe.on('close', (code) => finish(code === 0));
+    };
+    tryNext(0);
+  });
+}
+
+function uploadRecording(folderPath, sessionId, datasetType) {
+  const wavPath = path.join(folderPath, `${sessionId}.wav`);
+  const csvPath = path.join(folderPath, `${sessionId}.csv`);
+  if (!fs.existsSync(wavPath) || !fs.existsSync(csvPath)) {
+    log.error(`Recording upload skipped because finalized files are missing: ${folderPath}`);
+    uploadStartedAt = null;
+    trackRecording('upload-failed', { value: '0' });
+    return;
+  }
+
+  const { gurdwaraName, hfTokenKhalis } = recordingPrefs();
+  if (!gurdwaraName || !hfTokenKhalis) {
+    log.error('Recording upload skipped because Gurdwara name or HF token is not saved');
+    uploadStartedAt = null;
+    trackRecording('upload-failed', { value: '0' });
+    return;
+  }
+
+  findPython().then((python) => {
+    trackRecording('python-available', { value: python ? '1' : '0' });
+    if (!python) {
+      log.error('Recording upload skipped because Python 3 is not installed');
+      uploadStartedAt = null;
+      return;
+    }
+
+    let dependenciesReady = false;
+    const uploader = spawn(
+      python.command,
+      [
+        ...python.prefix,
+        recordingUploaderScript,
+        folderPath,
+        '--collection',
+        gurdwaraName.trim().toLowerCase().replace(/\s+/g, '_'),
+        '--dataset-type',
+        datasetType === 'paath' ? 'paath' : 'kirtan',
+        '--hf-namespace',
+        'khalisfoundation',
+      ],
+      {
+        cwd: path.dirname(recordingUploaderScript),
+        env: { ...process.env, HF_TOKEN_KHALIS: hfTokenKhalis },
+        windowsHide: true,
+      },
+    );
+
+    const readUploaderLine = (data, isError) => {
+      const line = data.toString().trim();
+      if (!line) return;
+      if (line.includes('python-dependencies 1')) dependenciesReady = true;
+      // huggingface_hub / datasets write tqdm progress to stderr. That is not a failure.
+      const isProgress =
+        /%\|/.test(line) ||
+        /examples\/s|shards\/s|\dba\/s/.test(line) ||
+        /^(Map|Creating parquet|Processing Files|New Data Upload|Uploading the dataset shards):/.test(
+          line,
+        ) ||
+        line.includes('Setting num_proc from');
+      if (isError && !isProgress) log.error(`[recording-upload] ${line}`);
+      else log.info(`[recording-upload] ${line}`);
+    };
+    uploader.stdout.on('data', (data) => readUploaderLine(data, false));
+    uploader.stderr.on('data', (data) => readUploaderLine(data, true));
+    uploader.on('close', (code) => {
+      const seconds = uploadStartedAt ? (Date.now() - uploadStartedAt) / 1000 : 0;
+      uploadStartedAt = null;
+      if (!dependenciesReady) {
+        log.error(`Recording Python dependencies failed for ${sessionId}`);
+        trackRecording('python-dependencies', { value: '0' });
+        return;
+      }
+      trackRecording('python-dependencies', { value: '1' });
+      if (code === 0) {
+        fs.rmSync(folderPath, { recursive: true, force: true });
+        log.info(`Recording upload completed and local folder removed: ${sessionId}`);
+        trackRecording('upload-succeeded', { value: seconds.toFixed(1) });
+      } else {
+        log.error(`Recording upload failed for ${sessionId} with exit code ${code}`);
+        trackRecording('upload-failed', { value: seconds.toFixed(1) });
+      }
+    });
+  });
+}
+
+function toggleRecording(datasetType) {
+  if (!recordingReady()) return;
+
+  if (!isRecording) {
+    isRecording = true;
+    recordingStartTime = Date.now();
+    recordingSessionId = new Date(recordingStartTime).toISOString().replace(/[:.]/g, '-');
+    recordingSessionDir = path.join(recordingsDir, recordingSessionId);
+    fs.mkdirSync(recordingSessionDir, { recursive: true });
+    recordingEvents = [];
+    recordingDatasetType = datasetType === 'paath' ? 'paath' : 'kirtan';
+    trackRecording('recording-started');
+  } else {
+    isRecording = false;
+    writeRecordingEventsCsv();
+    trackRecording('recording-stopped');
+  }
+
+  const payload = { isRecording, sessionId: recordingSessionId, folderPath: recordingSessionDir };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('recording-toggle', payload);
+  }
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
+    viewerWindow.webContents.send('recording-state', isRecording);
+  }
+}
 
 app.setAsDefaultProtocolClient('sttm-desktop');
 
@@ -360,7 +599,9 @@ function trackDisplay(action) {
 
 function getExternalDisplays() {
   const primaryDisplayId = electron.screen.getPrimaryDisplay().id;
-  return electron.screen.getAllDisplays().filter((display) => display.id !== primaryDisplayId);
+  return electron.screen.getAllDisplays().filter(
+    (display) => display.id !== primaryDisplayId && display.internal !== true,
+  );
 }
 
 function trackDisplay2Connection() {
@@ -560,6 +801,11 @@ function sendToViewerWindows(channel, ...args) {
 }
 
 function showChangelog() {
+  // Experimental builds don't have changelog entries of their own
+  if (appVersion.includes('experimental')) {
+    return false;
+  }
+
   const lastSeen = store.get('changelog-seen');
   const lastSeenCount = store.get('changelog-seen-count');
   const { limitChangeLog } = savedSettings;
@@ -1283,7 +1529,9 @@ app.on('ready', () => {
       mainWindow.webContents.send('userToken', token);
     }
     // Platform-specific app stores have their own update mechanism
-    // so only check if we're not in one
+    // so only check if we're not in one. The tester build never auto-updates: its updater
+    // points at the public sttm-desktop releases, and the next public release would replace
+    // the tester app (and its bundled model) with the standard one.
     if (!appstore && !isUnsupportedWindow) {
       checkForUpdates();
     }
@@ -1299,6 +1547,57 @@ app.on('ready', () => {
     syncViewerWindows();
   });
   mainWindow.loadURL(`file://${__dirname}/www/index.html`);
+
+  // Automated smoke test: `VF_SMOKE=1 electron .` (or `npm run smoke`).
+  // Launches the real app, waits for the renderer to settle, then checks
+  // whether the ErrorBoundary fallback tripped or the renderer logged errors,
+  // prints a machine-readable PASS/FAIL to stdout, and quits. Lets a crash be
+  // detected without a human watching the window.
+  if (process.env.VF_SMOKE) {
+    const rendererErrors = [];
+    mainWindow.webContents.on('console-message', (_e, level, message) => {
+      // level 3 === error
+      if (level >= 3) rendererErrors.push(message);
+    });
+    mainWindow.webContents.on('render-process-gone', (_e, details) => {
+      // eslint-disable-next-line no-console
+      console.log(`SMOKE_RESULT: FAIL renderer-gone ${JSON.stringify(details)}`);
+      app.exit(1);
+    });
+    mainWindow.webContents.on('did-finish-load', () => {
+      const waitMs = parseInt(process.env.VF_SMOKE_WAIT || '6000', 10);
+      setTimeout(() => {
+        mainWindow.webContents
+          .executeJavaScript(
+            `(function () {
+              const h = document.querySelector('h2');
+              const boundaryTripped = !!(h && /Render error/.test(h.textContent || ''));
+              const pre = document.querySelector('pre');
+              return { boundaryTripped, stack: pre ? pre.textContent : null };
+            })()`,
+          )
+          .then((r) => {
+            const ok = !r.boundaryTripped && rendererErrors.length === 0;
+            // eslint-disable-next-line no-console
+            console.log(`SMOKE_RESULT: ${ok ? 'PASS' : 'FAIL'}`);
+            if (r.boundaryTripped) {
+              // eslint-disable-next-line no-console
+              console.log(`SMOKE_BOUNDARY_STACK:\n${r.stack}`);
+            }
+            if (rendererErrors.length) {
+              // eslint-disable-next-line no-console
+              console.log(`SMOKE_CONSOLE_ERRORS:\n${rendererErrors.join('\n---\n')}`);
+            }
+            app.exit(ok ? 0 : 1);
+          })
+          .catch((err) => {
+            // eslint-disable-next-line no-console
+            console.log(`SMOKE_RESULT: FAIL eval-error ${err && err.message}`);
+            app.exit(1);
+          });
+      }, waitMs);
+    });
+  }
 
   if (!store.get('user-agent')) {
     store.set('user-agent', mainWindow.webContents.getUserAgent());
@@ -1384,6 +1683,40 @@ ipcMain.on('clear-apv', () => {
 
 ipcMain.on('save-overlay-settings', (event, overlayPrefs) => {
   updateOverlayVars(JSON.parse(overlayPrefs));
+});
+
+ipcMain.on('toggle-recording', (_event, payload) => {
+  toggleRecording(payload && payload.datasetType);
+});
+
+ipcMain.on('recording-files-ready', (_event, { sessionId, folderPath }) => {
+  uploadStartedAt = Date.now();
+  uploadRecording(folderPath, sessionId, recordingDatasetType);
+});
+
+ipcMain.handle('get-recording-settings', () => recordingPrefs());
+
+ipcMain.handle('save-recording-settings', (_event, { gurdwaraName, hfTokenKhalis }) => {
+  const wasReady = recordingReady();
+  store.set('recording.gurdwaraName', gurdwaraName || '');
+  if (hfTokenKhalis) {
+    saveHfTokenKhalis(hfTokenKhalis);
+  }
+  if (!wasReady && recordingReady()) {
+    trackRecording('recording-settings-saved');
+  }
+  return recordingPrefs();
+});
+
+ipcMain.on('recording-event', (_event, payload) => {
+  if (!isRecording || !payload || payload.event !== 'verse' || payload.verseId == null) {
+    return;
+  }
+
+  recordingEvents.push({
+    verseId: payload.verseId,
+    t: (Date.now() - recordingStartTime) / 1000,
+  });
 });
 
 ipcMain.on('deleteToken', () => {
@@ -1572,6 +1905,13 @@ ipcMain.on('scroll-pos', (event, arg) => {
 ipcMain.on('update-settings', () => {
   sendToViewerWindows('update-settings');
   mainWindow.webContents.send('sync-settings');
+});
+
+// A new AI translations database was downloaded; every window reopens it
+ipcMain.on('ai-translations-updated', () => {
+  BrowserWindow.getAllWindows().forEach((win) => {
+    win.webContents.send('ai-translations-updated');
+  });
 });
 
 ipcMain.on('save-settings', (event, setting) => {

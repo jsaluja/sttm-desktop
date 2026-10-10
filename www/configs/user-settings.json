@@ -75,7 +75,7 @@
     "other-options": {
       "title": "OTHER_OPTIONS",
       "type": "switch",
-      "settings": ["limit-change-log", "statistics"]
+      "settings": ["limit-change-log", "statistics", "improve-voice-follow", "shadow-recording"]
     }
   },
   "settings": {
@@ -266,7 +266,9 @@
       "options": {
         "bdb": "BANI_DB",
         "ms": "MANMOHAN_SINGH",
-        "ssk": "SANT_SINGH_KHALSA"
+        "ssk": "SANT_SINGH_KHALSA",
+        "pss": "PROF_SAHIB_SINGH",
+        "pss_simple": "PROF_SAHIB_SINGH_SIMPLIFIED"
       },
       "condition": "translation-language",
       "conditionValue": "English",
@@ -325,6 +327,22 @@
       "title": "COLLECT_STATISTICS",
       "initialValue": true,
       "store": "userPrefs.app.analytics.collectStatistics"
+    },
+    "shadow-recording": {
+      "title": "SHADOW_RECORDING",
+      "dontApplyClass": true,
+      "initialValue": true,
+      "notes": "SHADOW_RECORDING_MSG"
+    },
+    "shadow-tester": {
+      "title": "SHADOW_TESTER",
+      "dontApplyClass": true,
+      "initialValue": ""
+    },
+    "improve-voice-follow": {
+      "title": "IMPROVE_VOICE_FOLLOW",
+      "initialValue": true,
+      "notes": "IMPROVE_VOICE_FOLLOW_MSG"
     },
     "theme": {
       "title": "THEME",

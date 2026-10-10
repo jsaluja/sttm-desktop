@@ -1,10 +1,11 @@
 import React from 'react';
 import { useStoreState, useStoreActions } from 'easy-peasy';
 import { updateViewerScale } from '../../viewer/utils';
+import ExperimentalBadge from '../../common/sttm-ui/experimental-badge';
+import { i18n } from '../../common/i18n';
 
 const remote = require('@electron/remote');
 
-const { i18n } = remote.require('./app');
 const analytics = remote.getGlobal('analytics');
 
 // const { store } = remote.require('./app');
@@ -53,6 +54,7 @@ const WorkspaceBar = () => {
           <span className="workspace-name"> {workspace} </span>
         </div>
       ))}
+      <ExperimentalBadge className="workspace-experimental-badge" />
     </div>
   );
 };

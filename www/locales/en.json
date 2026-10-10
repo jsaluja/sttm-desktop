@@ -74,6 +74,10 @@
     "SINGLE_DISPLAY": "Single-Display",
     "MULTI_PANE": "Multi-Pane"
   },
+  "EXPERIMENTAL": {
+    "LABEL": "Experimental build",
+    "DESCRIPTION": "You're using an experimental build of SikhiToTheMax ({{version}}). It's for trying out new features before they're released, so some things may be unfinished or may not work. Please use the stable SikhiToTheMax app for live programs, and report any problems you find."
+  },
   "CHROMECAST": {
     "CANCEL": "Cancel",
     "MSG_SENT": "Message sent: ",
@@ -316,6 +320,7 @@
     "VISHRAAM_SOURCE": "Vishraam Source",
     "SLIDE_OPTIONS": "Slide Options",
     "BANI_AND_LANGUAGES": "Bani & Languages",
+    "RECORDING_SETTINGS": "Recording Settings",
     "FONT_SIZES": "Font Sizes",
     "ANNOUNCEMENTS": "Announcements",
     "BANI": "Bani",
@@ -362,6 +367,11 @@
     "LIVE_FEED": "Live Feed Text Files",
     "OTHER_OPTIONS": "Other Options",
     "COLLECT_STATISTICS": "Collect Statistics",
+    "SHADOW_RECORDING": "Voice-Follow Test Recording",
+    "SHADOW_RECORDING_MSG": "Records the Gurdwara audio and what you show, and uploads it to help test Voice-Follow",
+    "SHADOW_TESTER": "Voice-Follow Tester",
+    "IMPROVE_VOICE_FOLLOW": "Help Improve Voice-Follow",
+    "IMPROVE_VOICE_FOLLOW_MSG": "When you correct the Shabad, keep a short audio clip on this computer so recognition can get better at your Gurdwara",
     "LIMIT_CHANGELOG": "Limit Changelog",
     "LIMIT_CHANGELOG_MSG": "Only see changelog once per version",
     "FIELDS_TO_DISPLAY": {
@@ -378,6 +388,8 @@
     "SANT_SINGH": "Sant Singh",
     "SAHIB_SINGH": "Sahib Singh",
     "SANT_SINGH_KHALSA": "Sant Singh Khalsa",
+    "PROF_SAHIB_SINGH": "Prof Sahib Singh",
+    "PROF_SAHIB_SINGH_SIMPLIFIED": "Prof Sahib Singh - Short",
     "FAREEDKOT": "Fareedkot"
   },
   "SHORTCUT_TRAY": {
@@ -435,6 +447,7 @@
     "CEREMONIES": "Ceremonies",
     "SETTINGS": "Settings",
     "SUNDAR_GUTKA": "Sundar Gutka",
+    "VOICE_FOLLOW": "Voice Follow",
     "CHOOSE_THEME": "Choose a Theme to launch",
     "CURRENT_SHABAD": "Current Shabad",
     "DISABLE_CONNECTIONS_MSG": "Disable all the remote connections to {{appName}}",
