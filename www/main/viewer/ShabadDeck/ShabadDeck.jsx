@@ -14,13 +14,17 @@ import {
 import ViewerIcon from '../icons/ViewerIcon';
 import PaddingTools from '../Slide/PaddingTools';
 import AutoPlayIcon from '../Slide/AutoPlayIcon';
+import ExperimentalBadge from '../../common/sttm-ui/experimental-badge';
 import { BASE_BANI_OPTIONS } from '../../banidb/constants';
+import { i18n } from '../../common/i18n';
 
 const os = require('os');
 const remote = require('@electron/remote');
+const aiTranslationDB = require('../../banidb/pss-db');
 
-const { i18n } = remote.require('./app');
 const platform = os.platform();
+// The viewer also runs embedded in the main window as a <webview>; the external viewer window doesn't
+const isEmbeddedViewer = remote.getCurrentWebContents().getType() === 'webview';
 
 const themes = require('../../../configs/themes.json');
 
@@ -122,6 +126,19 @@ function ShabadDeck() {
     try {
       const translations = JSON.parse(activeVerse[0].Translations);
 
+      // Inject the AI translation when one of its sources is selected, so the
+      // English option's visibility is computed from the text actually shown
+      if (aiTranslationDB.isAiSource(translationEnglishSource)) {
+        const translationText = aiTranslationDB.getTranslation(
+          activeVerse[0].ID,
+          translationEnglishSource,
+        );
+        if (translationText) {
+          if (!translations.en) translations.en = {};
+          translations.en[translationEnglishSource] = translationText;
+        }
+      }
+
       const visibilityMap = {
         'teeka-punjabi': translations?.pu?.[teekaSource]?.length,
         'translation-english': translations?.en?.[translationEnglishSource]?.length,
@@ -165,12 +182,12 @@ function ShabadDeck() {
 
       } else {
         loadShabadVerse(currentShabad, activeVerseId).then((result) =>
-          result.map((activeRes) => setActiveVerse([activeRes])),
+          (result || []).map((activeRes) => setActiveVerse([activeRes])),
         );
         // load next line of searched shabad verse from db
         if (displayNextLine && !isMiscSlide) {
           loadShabadVerse(currentShabad, activeVerseId, displayNextLine).then((result) => {
-            if (result.length) {
+            if (result && result.length) {
               result.map((activeRes) => setNextVerse(activeRes));
             } else {
               setNextVerse(bakeEmptyVerse());
@@ -298,7 +315,7 @@ function ShabadDeck() {
         settingType: 'navigator',
       }),
     );
-  }, [activeVerse, setFilteredBaniOptions]);
+  }, [activeVerse, setFilteredBaniOptions, translationEnglishSource, teekaSource]);
 
   return (
     <>
@@ -352,6 +369,7 @@ function ShabadDeck() {
         </div>
       </div>
       <ViewerIcon className="viewer-logo" />
+      {!isEmbeddedViewer && <ExperimentalBadge className="viewer-experimental-badge" />}
     </>
   );
 }
