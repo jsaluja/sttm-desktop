@@ -3,6 +3,7 @@ import { useStoreActions, useStoreState } from 'easy-peasy';
 import { Virtuoso } from 'react-virtuoso';
 import { ipcRenderer } from 'electron';
 import PropTypes from 'prop-types';
+import { useRecordingState } from '../../common/hooks';
 
 import { loadShabad, loadBani, loadCeremony } from '../utils';
 import { ShabadVerse } from '../../common/sttm-ui';
@@ -17,8 +18,11 @@ import {
   copyToClipboard,
   intelligentNextVerse,
   sendToBaniController,
-  FLOWER_VERSE_ID,
+  ASA_DI_VAAR_BANI_ID,
+  isFlowerVerse,
 } from './utils';
+
+const { listScrollAction } = require('../../addons/voice-follow/components/autopilotScreen');
 
 const baniLengthCols = {
   short: 'existsSGPC',
@@ -47,6 +51,13 @@ export const ShabadText = ({
   const listScrollRef = useRef(null);
   // Id of the shabad/bani whose verses are currently in filteredItems.
   const loadedShabadIdRef = useRef(null);
+  // The sevadaar's own scrolling of this list (controller only): while Autopilot moves the
+  // line, a recent scroll keeps their view where it is (see listScrollAction).
+  const userScrollAtRef = useRef(0);
+  const visibleRangeRef = useRef(null);
+  const positionItemsRef = useRef(null);
+  const autopilotLive = useStoreState((state) => state.app.autopilotLive);
+  const isRecording = useRecordingState();
 
   const {
     activeVerseId,
@@ -89,12 +100,32 @@ export const ShabadText = ({
     setIsSundarGutkaBani,
   } = useStoreActions((actions) => actions.navigator);
 
+  const isAsaDiVaar = baniType === 'bani' && Number(shabadId) === ASA_DI_VAAR_BANI_ID;
+
+  // Scroll the list to a line Autopilot (or a controller) selected, unless the sevadaar is
+  // looking around the list by hand (then only the highlight moves).
+  const followToVerse = (verseId, items, behavior) => {
+    const action = listScrollAction({
+      autopilotLive,
+      lastUserScrollAt: userScrollAtRef.current,
+      now: Date.now(),
+      activeIndex: items.findIndex((v) => v.verseId === verseId),
+      range: visibleRangeRef.current,
+    });
+    if (action === 'keep') return;
+    if (action === 'resume') userScrollAtRef.current = 0;
+    scrollToVerse(verseId, items, virtuosoRef, isAsaDiVaar, behavior);
+  };
+  const markUserScroll = () => {
+    userScrollAtRef.current = Date.now();
+  };
+
   const updateTraversedVerse = (newTraversedVerse, verseIndex, crossPlatformId = null) => {
     if (isMiscSlide) {
       setIsMiscSlide(false);
     }
     // Ignoring flower verse to avoid unwanted scroll during asa di vaar
-    if (newTraversedVerse === FLOWER_VERSE_ID) {
+    if (isFlowerVerse(newTraversedVerse, isAsaDiVaar)) {
       return;
     }
     // activePaneId is null until first focus — treat null as "this pane is live"
@@ -133,6 +164,9 @@ export const ShabadText = ({
       activeShabadId,
       paneAttributes,
     });
+    if (isRecording) {
+      ipcRenderer.send('recording-event', { event: 'verse', verseId: newTraversedVerse });
+    }
   };
 
   const updateHomeVerse = (verseIndex) => {
@@ -166,6 +200,13 @@ export const ShabadText = ({
   };
 
   useEffect(() => {
+    if (!shabadId) {
+      setFilteredItems([]);
+      setRawVerses([]);
+      setActiveVerse({});
+      loadedShabadIdRef.current = null;
+      return;
+    }
     if (baniType === 'shabad') {
       loadShabad(shabadId).then(setVerseList);
     } else if (baniType === 'bani') {
@@ -186,7 +227,7 @@ export const ShabadText = ({
       filteredItems.length
     ) {
       updateTraversedVerse(filteredItems[0].verseId, 0);
-      scrollToVerse(filteredItems[0].verseId, filteredItems, virtuosoRef);
+      scrollToVerse(filteredItems[0].verseId, filteredItems, virtuosoRef, isAsaDiVaar);
     }
   }, [paneAttributes.baniOpenedAt]);
 
@@ -203,7 +244,7 @@ export const ShabadText = ({
         return;
       }
       setTimeout(() => {
-        scrollToVerse(initialVerseId, filteredItems, virtuosoRef);
+        scrollToVerse(initialVerseId, filteredItems, virtuosoRef, isAsaDiVaar);
       }, 100);
       const initialVerseIndex = filteredItems.findIndex(
         (verse) => verse.verseId === initialVerseId,
@@ -250,6 +291,8 @@ export const ShabadText = ({
     // change — the display would then stay stuck on the opening verse. Position
     // drives it regardless. id-match remains the fallback for shabad and native
     // (mobile) controllers, which send a crossPlatformId but no line position.
+    const sameList = positionItemsRef.current === filteredItems;
+    positionItemsRef.current = filteredItems;
     const isPosition = baniType === 'bani' || baniType === 'ceremony';
     const positionIndex = lineNumber != null ? lineNumber - 1 : -1;
     const hasValidPosition =
@@ -273,7 +316,9 @@ export const ShabadText = ({
       updateTraversedVerse(matched.verseId, baniVerseIndex);
       // Highlighting alone doesn't move the virtualized list — scroll the
       // presenter view to the matched verse so the display actually changes.
-      scrollToVerse(matched.verseId, filteredItems, virtuosoRef);
+      // A line move in the list already open respects the sevadaar's own scrolling.
+      if (sameList) followToVerse(matched.verseId, filteredItems);
+      else scrollToVerse(matched.verseId, filteredItems, virtuosoRef, isAsaDiVaar);
     }
     // `filteredItems` is a dep so a verse that arrives after the bani finishes
     // loading (the transient `matchIdx = -1` case) is picked up on the next
@@ -315,7 +360,7 @@ export const ShabadText = ({
     ) {
       if (lineNumber !== null && filteredItems[lineNumber - 1]?.verseId === activeVerseId) {
         setActiveVerse({ [lineNumber - 1]: activeVerseId });
-        scrollToVerse(activeVerseId, filteredItems, virtuosoRef);
+        followToVerse(activeVerseId, filteredItems);
       }
     }
   }, [
@@ -383,7 +428,7 @@ export const ShabadText = ({
     if (verseIndex >= 0) {
       // Jump straight there: a smooth scroll to a far-off verse left the list on
       // the old verse for a moment after the display had already changed.
-      scrollToVerse(activeVerseId, filteredItems, virtuosoRef, 'auto');
+      followToVerse(activeVerseId, filteredItems, 'auto');
       updateTraversedVerse(activeVerseId, verseIndex);
     }
   }, [activeVerseId]);
@@ -409,7 +454,7 @@ export const ShabadText = ({
         if (filteredItems.length - 1 > parseInt(activeVerseIndex, 10)) {
           let nextVerseIndex = parseInt(activeVerseIndex, 10) + 1;
           // Ignoring flower verse to avoid unwanted scroll during asa di vaar
-          if (filteredItems[nextVerseIndex]?.verseId === FLOWER_VERSE_ID) {
+          if (isFlowerVerse(filteredItems[nextVerseIndex]?.verseId, isAsaDiVaar)) {
             nextVerseIndex++;
           }
           if (nextVerseIndex < filteredItems.length) {
@@ -422,7 +467,7 @@ export const ShabadText = ({
         if (parseInt(activeVerseIndex, 10) > 0) {
           let prevVerseIndex = parseInt(activeVerseIndex, 10) - 1;
           // Ignoring flower verse to avoid unwanted scroll during asa di vaar
-          if (filteredItems[prevVerseIndex]?.verseId === FLOWER_VERSE_ID) {
+          if (isFlowerVerse(filteredItems[prevVerseIndex]?.verseId, isAsaDiVaar)) {
             prevVerseIndex--;
           }
           if (prevVerseIndex >= 0) {
@@ -446,7 +491,7 @@ export const ShabadText = ({
         const nextVerse = getVerse('next');
         if (nextVerse) {
           updateTraversedVerse(nextVerse.verseId, nextVerse.verseIndex);
-          scrollToVerse(nextVerse.verseId, filteredItems, virtuosoRef);
+          scrollToVerse(nextVerse.verseId, filteredItems, virtuosoRef, isAsaDiVaar);
         } else if (akhandpatt && !isSundarGutkaBani && !isCeremonyBani) {
           setShortcuts({
             ...shortcuts,
@@ -463,7 +508,7 @@ export const ShabadText = ({
         const prevVerse = getVerse('prev');
         if (prevVerse) {
           updateTraversedVerse(prevVerse.verseId, prevVerse.verseIndex);
-          scrollToVerse(prevVerse.verseId, filteredItems, virtuosoRef);
+          scrollToVerse(prevVerse.verseId, filteredItems, virtuosoRef, isAsaDiVaar);
         }
         setShortcuts({
           ...shortcuts,
@@ -482,7 +527,7 @@ export const ShabadText = ({
         });
         if (verse) {
           updateTraversedVerse(verse.verseId, verse.verseIndex);
-          scrollToVerse(verse.verseId, filteredItems, virtuosoRef);
+          scrollToVerse(verse.verseId, filteredItems, virtuosoRef, isAsaDiVaar);
         }
         setShortcuts({
           ...shortcuts,
@@ -533,6 +578,7 @@ export const ShabadText = ({
         verse={verse}
         englishVerse={english}
         verseId={verseId}
+        isFlowerVerse={isFlowerVerse(verseId, isAsaDiVaar)}
         changeHomeVerse={updateHomeVerse}
         updateTraversedVerse={updateTraversedVerse}
       />
@@ -541,7 +587,20 @@ export const ShabadText = ({
 
   return (
     <div className="shabad-list">
-      <div className="verse-block" ref={isProjection ? listScrollRef : undefined}>
+      <div
+        className="verse-block"
+        ref={isProjection ? listScrollRef : undefined}
+        onWheel={isProjection ? undefined : markUserScroll}
+        onTouchMove={isProjection ? undefined : markUserScroll}
+        onPointerDown={
+          isProjection
+            ? undefined
+            : (e) => {
+                // A press on the list's scrollbar (beyond its content width) drags it.
+                if (e.nativeEvent.offsetX >= e.target.clientWidth) markUserScroll();
+              }
+        }
+      >
         {isProjection ? (
           // Full list on Display 2 — every row is in the DOM (no Virtuoso windowing).
           // Controller keeps Virtuoso for performance; projection needs last lines reachable.
@@ -559,6 +618,7 @@ export const ShabadText = ({
             ref={virtuosoRef}
             totalCount={filteredItems.length}
             rangeChanged={(range) => {
+              visibleRangeRef.current = range;
               if (projectionSource && !isProjection) {
                 ipcRenderer.send('projection-range', { paneId: currentPane, ...range });
               }

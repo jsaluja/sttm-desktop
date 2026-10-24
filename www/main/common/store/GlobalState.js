@@ -22,17 +22,30 @@ const GlobalState = createStore({
     overlayScreen: DEFAULT_OVERLAY,
     isListeners: false,
     userToken: '',
+    // Search pane tab: false = Search, true = Voice-Follow Autopilot.
+    autopilotEnabled: false,
+    // A Voice-Follow session is running (shown on the Autopilot tab).
+    autopilotLive: false,
+    // Tester build: what the background recorder is doing with the microphone, for the
+    // "Recording audio" chip ('off' | 'listening' | 'recording'; shadow/ShadowCollector.jsx).
+    shadowMicState: 'off',
     setOverlayScreen: action((state, payload) => {
       state.overlayScreen = payload;
-      return state;
     }),
     setListeners: action((state, listenersState) => {
       state.isListeners = listenersState;
-      return state;
     }),
     setUserToken: action((state, payload) => {
       state.userToken = payload;
-      return state;
+    }),
+    setAutopilotEnabled: action((state, payload) => {
+      state.autopilotEnabled = !!payload;
+    }),
+    setAutopilotLive: action((state, payload) => {
+      state.autopilotLive = !!payload;
+    }),
+    setShadowMicState: action((state, payload) => {
+      state.shadowMicState = payload || 'off';
     }),
   },
   baniController: {
@@ -41,15 +54,12 @@ const GlobalState = createStore({
     isConnected: false,
     setAdminPin: action((state, adminPin) => {
       state.adminPin = adminPin;
-      return state;
     }),
     setCode: action((state, code) => {
       state.code = code;
-      return state;
     }),
     setConnection: action((state, connectionState) => {
       state.isConnected = connectionState;
-      return state;
     }),
   },
   navigator: createNavigatorSettingsState(navigatorSettings),
@@ -63,31 +73,24 @@ const GlobalState = createStore({
     quickTools: false,
     paddingTools: false,
     setPadding: action((state, payload) => {
+      // Apply locally, then push out to the other window only.
+      // Sending both webview.send and ipc.send here loops forever:
+      // presenter click -> controller setPadding -> ipc -> presenter
+      // update-viewer-setting -> controller setPadding -> ipc ...
+      // which freezes the app as soon as a padding control is clicked.
+      // Do not return the immer draft.
+      state.containerPadding[payload.type] = payload.value;
+
+      const message = JSON.stringify({
+        payload,
+        actionName: 'setPadding',
+        settingType: 'viewerSettings',
+      });
       if (global.webview) {
-        global.webview.send(
-          'update-viewer-setting',
-          JSON.stringify({
-            payload,
-            actionName: 'setPadding',
-            settingType: 'viewerSettings',
-          }),
-        );
+        global.webview.send('update-viewer-setting', message);
+      } else if (global.platform) {
+        global.platform.ipc.send('update-viewer-setting', message);
       }
-
-      if (global.platform) {
-        global.platform.ipc.send(
-          'update-viewer-setting',
-          JSON.stringify({
-            payload,
-            actionName: 'setPadding',
-            settingType: 'viewerSettings',
-          }),
-        );
-      }
-      const newState = state;
-      newState.containerPadding[payload.type] = payload.value;
-
-      return newState;
     }),
   },
   userSettings: createUserSettingsState(settings, savedSettings, userConfigPath),
